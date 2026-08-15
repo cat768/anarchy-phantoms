@@ -1,19 +1,19 @@
-name: AnarchyWithers
+name: AnarchyPhantoms
 version: '1.0.0'
-main: com.anarchywithers.phantomcontrol.AnarchyWithersPlugin
+main: com.anarchyphantoms.phantomcontrol.AnarchyPhantomsPlugin
 api-version: '1.21'
 description: End-only phantom spawning restricted to endstone/chorus surfaces, passive until attacked, silent screech until provoked.
-author: AnarchyWithers
+author: AnarchyPhantoms
 folia-supported: true
 
 commands:
-  anarchywithers:
-    description: Reloads the AnarchyWithers plugin configuration.
-    usage: /anarchywithers reload
-    permission: anarchywithers.admin
-    aliases: [aw]
+  anarchyphantoms:
+    description: Reloads the AnarchyPhantoms plugin configuration.
+    usage: /anarchyphantoms reload
+    permission: anarchyphantoms.admin
+    aliases: [ap]
 
 permissions:
-  anarchywithers.admin:
-    description: Allows use of AnarchyWithers admin commands.
+  anarchyphantoms.admin:
+    description: Allows use of AnarchyPhantoms admin commands.
     default: op
