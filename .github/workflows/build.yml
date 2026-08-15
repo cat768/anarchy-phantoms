@@ -176,6 +176,19 @@ jobs:
           tail -n +1 -F logs/latest.log &
           TAIL_PID=$!
 
+          # The watcher loop below needs to see "Done"/error lines the
+          # moment they're printed. logs/latest.log is written by Paper's
+          # log4j2 RollingRandomAccessFile appender, which buffers/flushes
+          # on its own schedule - NOT synchronously per line - so under CI
+          # contention the console can show "Done" well before those same
+          # bytes land on disk, sometimes not until shutdown flushes
+          # everything at once. That made the watcher poll an effectively
+          # stale file and time out even on a perfectly healthy boot.
+          # console.log instead captures the JVM's raw stdout directly via
+          # `tee`, with no log4j buffering in between, so a line is visible
+          # to the watcher the instant the process writes it.
+          touch console.log
+
           # Feed "stop" after boot via a background watcher instead of relying
           # solely on a timeout, so we get a clean shutdown log when possible.
           #
@@ -201,8 +214,8 @@ jobs:
           TIMEOUT_SECS=630
           (
             for _ in $(seq 1 "$WATCH_SECS"); do
-              if grep -qE '^\[[0-9:]+ INFO\]: Done \(' logs/latest.log 2>/dev/null \
-                 || grep -qE '\*\*\*.*could not be loaded|Error occurred while enabling|disabled due to' logs/latest.log 2>/dev/null; then
+              if grep -qE '^\[[0-9:]+ INFO\]: Done \(' console.log 2>/dev/null \
+                 || grep -qE '\*\*\*.*could not be loaded|Error occurred while enabling|disabled due to' console.log 2>/dev/null; then
                 sleep 2
                 echo "stop"
                 break
@@ -213,6 +226,7 @@ jobs:
                 -XX:ActiveProcessorCount=4 \
                 -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 \
                 -jar paper.jar --nogui \
+                2>&1 | tee console.log \
             || true
 
           kill "$TAIL_PID" 2>/dev/null || true
