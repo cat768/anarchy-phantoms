@@ -67,7 +67,6 @@ public final class PhantomSpawnListener implements Listener {
         switch (reason) {
             case NATURAL:
             case DEFAULT:
-            case DENSITY:
             case REINFORCEMENTS:
                 return true;
             default:
