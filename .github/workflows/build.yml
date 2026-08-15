@@ -68,11 +68,20 @@ jobs:
         id: smoke
         env:
           TARGET_MC_VERSION: "1.21.9"
+        # Retries the whole smoke test up to twice. Shared CI runners can
+        # occasionally stall a cold Paper boot (world-gen/GC/noisy-neighbor
+        # contention) for reasons unrelated to the plugin - the log shows
+        # AnarchyPhantoms output but the server never reaches "Done" inside
+        # the watch window. A genuine plugin error is detected below and
+        # exits with status 1 immediately (no retry); a bare stall/timeout
+        # exits with status 2, which IS retried once.
         run: |
           set -uo pipefail
 
+          run_smoke_test() {
           UA="anarchy-phantoms-ci/1.0 (https://github.com/${{ github.repository }})"
           WORKDIR="$RUNNER_TEMP/paper-smoketest"
+          rm -rf "$WORKDIR"
           mkdir -p "$WORKDIR/plugins"
 
           echo "::group::Resolving stable Paper build for $TARGET_MC_VERSION"
@@ -87,7 +96,7 @@ jobs:
 
           if [ -z "$VERSIONS" ]; then
             echo "::error::Could not fetch Paper version list from Fill API"
-            exit 1
+            return 1
           fi
 
           # Only consider our target version and older ones - never walk
@@ -118,7 +127,7 @@ jobs:
 
           if [ -z "$DOWNLOAD_URL" ]; then
             echo "::error::No stable Paper build found for $TARGET_MC_VERSION or earlier"
-            exit 1
+            return 1
           fi
 
           MC_VERSION="$FOUND_VERSION"
@@ -174,18 +183,22 @@ jobs:
           # is safe headroom) and -XX:ActiveProcessorCount is pinned because
           # G1GC's auto-detected thread count can be wrong under the
           # runner's cgroup, which slows world-gen enough to blow a tight
-          # timeout even when there's no real OOM.
+          # timeout even when there's no real OOM. -Xms is set to 2G
+          # (rather than 1G) so the heap doesn't have to grow mid-boot on a
+          # contended host, which was adding avoidable delay right when
+          # startup is most timing-sensitive.
           #
-          # The watcher loop runs for 480s (8 min): a fresh void-world boot
-          # with no chunk cache should comfortably finish well inside that
-          # on shared CI hardware now that world-gen is cheap (see the
-          # void-world server.properties above). The outer `timeout` is
-          # given a 30s buffer beyond the watcher so a "Done" detected right
-          # at the edge of the window still has time to trigger a clean
-          # "stop" and shutdown log before the hard kill, instead of the
-          # two racing at the same deadline.
-          WATCH_SECS=480
-          TIMEOUT_SECS=510
+          # The watcher loop runs for 600s (10 min): observed CI runs have
+          # shown a healthy void-world boot occasionally take noticeably
+          # longer than a normal 5-10s local boot purely from shared-host
+          # contention, so this has more headroom than the previous 480s
+          # window. The outer `timeout` is given a 30s buffer beyond the
+          # watcher so a "Done" detected right at the edge of the window
+          # still has time to trigger a clean "stop" and shutdown log
+          # before the hard kill, instead of the two racing at the same
+          # deadline.
+          WATCH_SECS=600
+          TIMEOUT_SECS=630
           (
             for _ in $(seq 1 "$WATCH_SECS"); do
               if grep -qE '^\[[0-9:]+ INFO\]: Done \(' logs/latest.log 2>/dev/null \
@@ -196,7 +209,7 @@ jobs:
               fi
               sleep 1
             done
-          ) | timeout "$TIMEOUT_SECS" java -Xmx4G -Xms1G \
+          ) | timeout "$TIMEOUT_SECS" java -Xmx4G -Xms2G \
                 -XX:ActiveProcessorCount=4 \
                 -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 \
                 -jar paper.jar --nogui \
@@ -213,11 +226,18 @@ jobs:
           LOG="logs/latest.log"
           if [ ! -f "$LOG" ]; then
             echo "::error::Server produced no log file at all — it likely failed to start."
-            exit 1
+            return 1
           fi
 
           PLUGIN_NAME="AnarchyPhantoms"
           FAILED=0
+          # STALL_ONLY stays 1 only if every failure found below is the
+          # "never reached Done, but plugin did log output" case with no
+          # other error signature present - i.e. a pure slow/stalled boot.
+          # Any concrete plugin error (JVM crash, enable failure, plugin
+          # never loaded at all) flips this to 0, since retrying won't fix
+          # a real bug.
+          STALL_ONLY=1
 
           # Check for a JVM-level death (OOM, crash) before assuming this is
           # a plugin problem — these produce a tiny log with no plugin
@@ -226,6 +246,7 @@ jobs:
           if grep -qiE "java\.lang\.OutOfMemoryError|A fatal error has been detected by the Java Runtime Environment|Could not reserve enough space" "$LOG"; then
             echo "::error::The JVM itself crashed or ran out of heap before the server finished starting (not a plugin error). Consider raising -Xmx further."
             FAILED=1
+            STALL_ONLY=0
           fi
 
           LOG_SIZE=$(wc -c < "$LOG")
@@ -238,11 +259,13 @@ jobs:
              || grep -qE "$PLUGIN_NAME.*disabled due to" "$LOG"; then
             echo "::error::Plugin failed to enable. See extracted error below."
             FAILED=1
+            STALL_ONLY=0
           fi
 
           if ! grep -qE "\[$PLUGIN_NAME\] Enabling $PLUGIN_NAME" "$LOG"; then
             echo "::error::Never saw '[$PLUGIN_NAME] Enabling $PLUGIN_NAME' in the log — plugin was not loaded by the server."
             FAILED=1
+            STALL_ONLY=0
           fi
 
           if ! grep -qE '^\[[0-9:]+ INFO\]: Done \(' "$LOG"; then
@@ -250,6 +273,7 @@ jobs:
               echo "::error::Server never reached 'Done', but $PLUGIN_NAME did log output — this looks like a slow/stalled boot (world-gen, GC, or CI resource contention) rather than a plugin crash. See the log tail below."
             else
               echo "::error::Server never reached 'Done' and never logged anything about $PLUGIN_NAME — it did not finish starting, independent of the plugin."
+              STALL_ONLY=0
             fi
             FAILED=1
           fi
@@ -268,10 +292,32 @@ jobs:
               tail -n 100 "$LOG" >> "$GITHUB_STEP_SUMMARY"
             fi
             echo '```' >> "$GITHUB_STEP_SUMMARY"
-            exit 1
+            if [ "$STALL_ONLY" -eq 1 ]; then
+              return 2
+            fi
+            return 1
           fi
 
           echo "## ✅ Plugin loaded and enabled successfully on Paper $MC_VERSION (target: $TARGET_MC_VERSION)" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          ATTEMPTS=2
+          STATUS=0
+          for ATTEMPT in $(seq 1 "$ATTEMPTS"); do
+            echo "::group::Smoke test attempt $ATTEMPT/$ATTEMPTS"
+            run_smoke_test
+            STATUS=$?
+            echo "::endgroup::"
+            if [ "$STATUS" -eq 0 ]; then
+              break
+            fi
+            if [ "$STATUS" -eq 2 ] && [ "$ATTEMPT" -lt "$ATTEMPTS" ]; then
+              echo "::warning::Attempt $ATTEMPT looked like a CI stall (server never reached 'Done', no concrete plugin error) rather than a plugin bug. Retrying once before failing the job."
+              continue
+            fi
+            break
+          done
+          exit "$STATUS"
 
       # Log is uploaded regardless of pass/fail so you can inspect a failure
       # from the Actions UI without re-running anything.
