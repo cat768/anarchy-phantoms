@@ -50,19 +50,24 @@ jobs:
       # than just compiling. Fails the job (with the plugin's own error
       # printed) if it doesn't.
       #
-      # The Minecraft version isn't hardcoded: Paper's Fill API only ever
-      # marks the current version's builds as STABLE, and that version
-      # changes every few weeks. A hardcoded version (e.g. "1.21.9") will
-      # eventually get superseded and break the workflow with
-      # "No stable Paper build found", even though nothing in this repo is
-      # wrong. Instead we ask Fill for the latest version, and if that
-      # version has no STABLE build yet (common right after a Minecraft
-      # release, before Paper promotes a build), we walk backwards through
-      # versions until we find one that does - exactly matching PaperMC's
-      # own documented fallback logic:
+      # The target Minecraft/Paper version this plugin is developed and
+      # compiled against (see pom.xml's paper-api version). We smoke-test
+      # against THIS version rather than whatever Fill reports as globally
+      # latest: Minecraft moved to calendar-based versioning outside the
+      # 1.21.x line (e.g. 26.1, 26.2), and those newer server versions
+      # require a newer Java to even boot (26.1+ requires Java 25) than
+      # this plugin is compiled/targeted for. Chasing "latest" would smoke
+      # test a version this plugin was never built for, using a JDK too old
+      # to run it - which fails for reasons unrelated to the plugin itself.
+      #
+      # If TARGET_MC_VERSION has no STABLE build yet, we walk backwards
+      # through nearby versions until we find one that does - matching
+      # PaperMC's own documented fallback logic:
       # https://docs.papermc.io/misc/downloads-service
-      - name: Smoke test on latest stable Paper
+      - name: Smoke test on target Paper version
         id: smoke
+        env:
+          TARGET_MC_VERSION: "1.21.9"
         run: |
           set -uo pipefail
 
@@ -70,11 +75,13 @@ jobs:
           WORKDIR="$RUNNER_TEMP/paper-smoketest"
           mkdir -p "$WORKDIR/plugins"
 
-          echo "::group::Resolving latest stable Paper build"
+          echo "::group::Resolving stable Paper build for $TARGET_MC_VERSION"
 
           DOWNLOAD_URL=""
           FOUND_VERSION=""
 
+          # All known versions, newest-first, so we can walk backwards from
+          # (and including) our target if it has no STABLE build yet.
           VERSIONS=$(curl -sf -H "User-Agent: $UA" "https://fill.papermc.io/v3/projects/paper" \
             | jq -r '.versions | to_entries[] | .value[]' | sort -V -r)
 
@@ -83,7 +90,20 @@ jobs:
             exit 1
           fi
 
-          for MC_VERSION in $VERSIONS; do
+          # Only consider our target version and older ones - never walk
+          # forward into newer major versions (e.g. past 1.21.x into 26.x),
+          # since those may need a different Java version to run.
+          CANDIDATES=$(printf '%s\n' "$VERSIONS" | awk -v t="$TARGET_MC_VERSION" '
+            $0==t {found=1}
+            found {print}
+          ')
+          if [ -z "$CANDIDATES" ]; then
+            # Target not in the list at all (e.g. list format changed) -
+            # fall back to just trying the target version directly.
+            CANDIDATES="$TARGET_MC_VERSION"
+          fi
+
+          for MC_VERSION in $CANDIDATES; do
             echo "Checking $MC_VERSION for a stable build..."
             BUILDS=$(curl -sf -H "User-Agent: $UA" \
               "https://fill.papermc.io/v3/projects/paper/versions/${MC_VERSION}/builds") || continue
@@ -97,7 +117,7 @@ jobs:
           done
 
           if [ -z "$DOWNLOAD_URL" ]; then
-            echo "::error::No stable Paper build found for any recent Minecraft version"
+            echo "::error::No stable Paper build found for $TARGET_MC_VERSION or earlier"
             exit 1
           fi
 
@@ -178,7 +198,7 @@ jobs:
             exit 1
           fi
 
-          echo "## ✅ Plugin loaded and enabled successfully on Paper $MC_VERSION" >> "$GITHUB_STEP_SUMMARY"
+          echo "## ✅ Plugin loaded and enabled successfully on Paper $MC_VERSION (target: $TARGET_MC_VERSION)" >> "$GITHUB_STEP_SUMMARY"
 
       # Log is uploaded regardless of pass/fail so you can inspect a failure
       # from the Actions UI without re-running anything.
