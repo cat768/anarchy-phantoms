@@ -4,12 +4,12 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>com.anarchywithers</groupId>
-    <artifactId>anarchy-withers</artifactId>
+    <groupId>com.anarchyphantoms</groupId>
+    <artifactId>anarchy-phantoms</artifactId>
     <version>1.0.0</version>
     <packaging>jar</packaging>
 
-    <name>anarchy-withers</name>
+    <name>anarchy-phantoms</name>
     <description>Custom Phantom behavior: End-only spawning, endstone/chorus surface requirement, passive until attacked, silent screech until provoked.</description>
 
     <properties>
@@ -29,7 +29,7 @@
         <dependency>
             <groupId>io.papermc.paper</groupId>
             <artifactId>paper-api</artifactId>
-            <version>1.21.10-R0.1-SNAPSHOT</version>
+            <version>1.21.9-R0.1-SNAPSHOT</version>
             <scope>provided</scope>
         </dependency>
     </dependencies>

@@ -18,17 +18,17 @@ All of the above is configurable — see [Configuration](#configuration).
 | | |
 |---|---|
 | **Server software** | [Paper](https://papermc.io/) or [Folia](https://papermc.io/software/folia) |
-| **Minecraft version** | 1.21.9+ (built against current Paper API; see [Compatibility](#compatibility)) |
+| **Minecraft version** | 1.21.9+ (built/CI-tested on 1.21.9, `api-version: '1.21'` keeps it working on newer 1.21.x builds too; see [Compatibility](#compatibility)) |
 | **Java** | 21+ |
 
-> Spigot/Bukkit (non-Paper) are **not** supported — the plugin uses Paper-specific API (`EntitySoundEvent`) to control phantom sounds.
+> Spigot/Bukkit (non-Paper) are **not officially supported** — the plugin is built against the Paper API and ships with `folia-supported: true`, so it's tested only on Paper/Folia.
 
 ## Installation
 
-1. Download the latest `anarchy-withers-<version>.jar` from [Releases](../../releases) (or build it yourself — see below).
+1. Download the latest `anarchy-phantoms-<version>.jar` from [Releases](../../releases) (or build it yourself — see below).
 2. Drop it into your server's `plugins/` folder.
-3. Start/restart the server. A default `config.yml` will be generated under `plugins/AnarchyWithers/`.
-4. Adjust `config.yml` to taste, then run `/anarchywithers reload` (or `/aw reload`) to apply changes without a restart.
+3. Start/restart the server. A default `config.yml` will be generated under `plugins/AnarchyPhantoms/`.
+4. Adjust `config.yml` to taste, then run `/anarchyphantoms reload` (or `/ap reload`) to apply changes without a restart.
 
 ## Building from source
 
@@ -38,7 +38,7 @@ cd anarchy-phantoms
 mvn clean package
 ```
 
-The built jar will be in `target/anarchy-withers-<version>.jar`.
+The built jar will be in `target/anarchy-phantoms-<version>.jar`.
 
 ## Configuration
 
@@ -78,27 +78,30 @@ phantoms:
 
 | Command | Description | Permission | Default |
 |---|---|---|---|
-| `/anarchywithers reload` (alias `/aw reload`) | Reloads `config.yml` without a server restart | `anarchywithers.admin` | op |
+| `/anarchyphantoms reload` (alias `/ap reload`) | Reloads `config.yml` without a server restart | `anarchyphantoms.admin` | op |
 
 ## Compatibility
 
-This plugin targets whatever the **current stable Paper API** is, and aims to stay forward-compatible as Minecraft/Paper ship new versions:
+This plugin is currently built and CI-tested against **Paper 1.21.9**:
 
-- Starting in 2026, Mojang moved to year.drop versioning (e.g. `26.1`, `26.2`, ...) instead of `1.x`, and Paper follows the same scheme for Java Edition builds. Bedrock version numbers (e.g. `26.40`) are a **separate** numbering track and don't correspond 1:1 with Java/Paper releases — don't match them up when picking a Paper API version.
-- The `paper-api` dependency version in `pom.xml` and the `api-version` in `plugin.yml` should be bumped to track the latest Paper release as new versions ship. Paper API is generally backward compatible across minor releases, so builds against a recent API version will typically keep working on newer server versions without code changes.
+- `pom.xml` compiles against `paper-api` version `1.21.9-R0.1-SNAPSHOT`.
+- `plugin.yml` declares `api-version: '1.21'` — Paper's `api-version` field is only ever major.minor granularity, and Paper treats this as "compatible with any 1.21.x server." That's what lets a jar built against 1.21.9 load and run unmodified on newer 1.21.x releases (1.21.10, 1.21.11, ...) as well, without needing a rebuild for every patch version.
+- The CI workflow (`.github/workflows/build.yml`) boots a real Paper 1.21.9 server with the freshly built jar on every push and fails the build if the plugin doesn't reach "Done" and enable cleanly — so `pom.xml`'s Paper API version and the workflow's `TARGET_MC_VERSION` should always be kept in sync with each other.
 - **Folia support**: `folia-supported: true` is already set in `plugin.yml`. The plugin only uses standard Bukkit event listeners and per-entity persistent data (no global schedulers, no cross-region state), so it runs correctly under Folia's regionized threading model as well as on standard Paper.
+- Starting in 2026, Mojang moved to year.drop versioning (e.g. `26.1`, `26.2`, ...) instead of `1.x`, and Paper follows the same scheme for Java Edition builds going forward (1.21.11 was the last `1.x`-style release; see [Paper's project setup docs](https://docs.papermc.io/paper/dev/project-setup/)). Bedrock version numbers (e.g. `26.40`) are a **separate** numbering track and don't correspond 1:1 with Java/Paper releases — don't match them up when picking a Paper API version.
 
-If you update the target Minecraft version, the recommended process is:
+If you want to move the target Minecraft version forward:
 
-1. Bump `paper-api` in `pom.xml` to the latest `X.Y.Z-R0.1-SNAPSHOT` from the [PaperMC repository](https://repo.papermc.io/repository/maven-public/io/papermc/paper/paper-api/).
-2. Bump `api-version` in `plugin.yml` to match (Paper only requires the major.minor, e.g. `'1.21'` or the new year-based equivalent once Paper documents it for plugin.yml).
-3. Run `mvn clean package` and smoke-test spawning/combat/sound behavior in The End.
+1. Bump `paper-api` in `pom.xml` to the desired `X.Y.Z-R0.1-SNAPSHOT` (pre-26.1) or `YY.D.build.N-stable` (26.1+) from the [PaperMC repository](https://repo.papermc.io/repository/maven-public/io/papermc/paper/paper-api/) or [Fill](https://fill.papermc.io/).
+2. Bump `api-version` in `plugin.yml` to match the new major.minor.
+3. Bump `TARGET_MC_VERSION` in `.github/workflows/build.yml` to the same version so the CI smoke test actually boots against what the jar was compiled for.
+4. Run `mvn clean package` and smoke-test spawning/combat/sound behavior in The End.
 
 ## Project structure
 
 ```
-src/main/java/com/anarchywithers/phantomcontrol/
-├── AnarchyWithersPlugin.java       # Plugin entrypoint, command handling, listener registration
+src/main/java/com/anarchyphantoms/phantomcontrol/
+├── AnarchyPhantomsPlugin.java      # Plugin entrypoint, command handling, listener registration
 ├── PluginSettings.java             # Typed, reloadable view over config.yml
 ├── PhantomSpawnListener.java       # Restricts natural spawns to The End + valid surface blocks
 ├── PhantomBehaviorListener.java    # Keeps phantoms passive until they take player damage

@@ -166,7 +166,7 @@ jobs:
             exit 1
           fi
 
-          PLUGIN_NAME="AnarchyWithers"
+          PLUGIN_NAME="AnarchyPhantoms"
           FAILED=0
 
           if grep -qE "Error occurred while enabling $PLUGIN_NAME" "$LOG" \
@@ -191,7 +191,7 @@ jobs:
             echo '```' >> "$GITHUB_STEP_SUMMARY"
             # Print the plugin's own stack trace / error block, or fall back
             # to the tail of the log if nothing matched the pattern above.
-            awk '/\[AnarchyWithers\]|Error occurred while enabling|Caused by:|\tat /' "$LOG" \
+            awk '/\[AnarchyPhantoms\]|Error occurred while enabling|Caused by:|\tat /' "$LOG" \
               | tail -n 100 >> "$GITHUB_STEP_SUMMARY" \
               || tail -n 100 "$LOG" >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
