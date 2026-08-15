@@ -158,12 +158,24 @@ jobs:
 
           # Feed "stop" after boot via a background watcher instead of relying
           # solely on a timeout, so we get a clean shutdown log when possible.
-          # Raised heap from 1536M/1024M: Paper 1.21.9's registry/world-gen
-          # init on a fresh flat world needs more headroom than older
-          # versions did, and running out mid-init is what was killing the
-          # JVM almost immediately (hence the near-empty uploaded log).
+          #
+          # Heap raised to 4G (public-repo runners have 4 vCPU/16GB, so this
+          # is safe headroom) and -XX:ActiveProcessorCount is pinned because
+          # G1GC's auto-detected thread count can be wrong under the
+          # runner's cgroup, which slows world-gen enough to blow a tight
+          # timeout even when there's no real OOM.
+          #
+          # Both the watcher loop and the outer timeout are 480s (8 min):
+          # a fresh flat-world boot with no chunk cache can legitimately
+          # take several minutes on shared CI hardware, and previously the
+          # watcher (150s) gave up well before the outer timeout (240s),
+          # meaning "stop" was never sent and the server was just hard-killed
+          # with no clean shutdown log - which is what produced the "never
+          # reached Done" failure without a clear underlying cause.
+          WATCH_SECS=480
+          TIMEOUT_SECS=480
           (
-            for _ in $(seq 1 150); do
+            for _ in $(seq 1 "$WATCH_SECS"); do
               if grep -qE '^\[[0-9:]+ INFO\]: Done \(' logs/latest.log 2>/dev/null \
                  || grep -qE '\*\*\*.*could not be loaded|Error occurred while enabling|disabled due to' logs/latest.log 2>/dev/null; then
                 sleep 2
@@ -172,7 +184,8 @@ jobs:
               fi
               sleep 1
             done
-          ) | timeout 240 java -Xmx3G -Xms1G \
+          ) | timeout "$TIMEOUT_SECS" java -Xmx4G -Xms1G \
+                -XX:ActiveProcessorCount=4 \
                 -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 \
                 -jar paper.jar --nogui \
             || true
@@ -221,18 +234,27 @@ jobs:
           fi
 
           if ! grep -qE '^\[[0-9:]+ INFO\]: Done \(' "$LOG"; then
-            echo "::error::Server never reached 'Done' — it did not finish starting."
+            if grep -qi "$PLUGIN_NAME" "$LOG"; then
+              echo "::error::Server never reached 'Done', but $PLUGIN_NAME did log output — this looks like a slow/stalled boot (world-gen, GC, or CI resource contention) rather than a plugin crash. See the log tail below."
+            else
+              echo "::error::Server never reached 'Done' and never logged anything about $PLUGIN_NAME — it did not finish starting, independent of the plugin."
+            fi
             FAILED=1
           fi
 
           if [ "$FAILED" -ne 0 ]; then
             echo "## ❌ Plugin smoke test failed" >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
-            # Print the plugin's own stack trace / error block, or fall back
-            # to the tail of the log if nothing matched the pattern above.
-            awk '/\[AnarchyPhantoms\]|Error occurred while enabling|Caused by:|\tat /' "$LOG" \
-              | tail -n 100 >> "$GITHUB_STEP_SUMMARY" \
-              || tail -n 100 "$LOG" >> "$GITHUB_STEP_SUMMARY"
+            # Print the plugin's own stack trace / error block if there is
+            # one; otherwise (e.g. a stall/timeout with no plugin-specific
+            # lines at all) fall back to a plain tail of the log so the
+            # summary is never empty.
+            RELEVANT=$(awk '/\[AnarchyPhantoms\]|Error occurred while enabling|Caused by:|\tat /' "$LOG" | tail -n 100)
+            if [ -n "$RELEVANT" ]; then
+              printf '%s\n' "$RELEVANT" >> "$GITHUB_STEP_SUMMARY"
+            else
+              tail -n 100 "$LOG" >> "$GITHUB_STEP_SUMMARY"
+            fi
             echo '```' >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
@@ -243,7 +265,7 @@ jobs:
       # from the Actions UI without re-running anything.
       - name: Upload server log
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: paper-smoketest-log-${{ steps.sha.outputs.short }}
           path: ${{ runner.temp }}/paper-smoketest/logs/latest.log
@@ -251,7 +273,7 @@ jobs:
 
       # Always available under the workflow run's "Artifacts" section.
       - name: Upload build artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.jar.outputs.name }}
           path: ${{ steps.jar.outputs.path }}
