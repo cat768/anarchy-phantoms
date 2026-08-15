@@ -18,7 +18,7 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
@@ -131,17 +131,37 @@ jobs:
           echo "eula=true" > "$WORKDIR/eula.txt"
           # Headless/offline settings so the server boots without a real
           # network/account context and shuts down cleanly on its own.
+          # generator-settings is explicit (rather than relying on the
+          # implicit default) since recent Paper versions want a valid
+          # value here for flat worlds and silently retrying/erroring on a
+          # bad implicit default is what was producing near-empty logs.
           {
             echo "online-mode=false"
             echo "server-port=25599"
-            echo "level-type=flat"
+            echo "level-type=minecraft:flat"
+            echo "generator-settings={}"
             echo "spawn-protection=0"
+            echo "view-distance=4"
+            echo "simulation-distance=4"
           } > "$WORKDIR/server.properties"
 
           echo "::group::Starting Paper server"
           cd "$WORKDIR"
+          # Stream the log to the job's own stdout live (tail -F in the
+          # background) so if the server dies before writing much to disk,
+          # we still see what happened in the Actions log itself rather than
+          # only getting a truncated logs/latest.log after the fact.
+          mkdir -p logs
+          touch logs/latest.log
+          tail -n +1 -F logs/latest.log &
+          TAIL_PID=$!
+
           # Feed "stop" after boot via a background watcher instead of relying
           # solely on a timeout, so we get a clean shutdown log when possible.
+          # Raised heap from 1536M/1024M: Paper 1.21.9's registry/world-gen
+          # init on a fresh flat world needs more headroom than older
+          # versions did, and running out mid-init is what was killing the
+          # JVM almost immediately (hence the near-empty uploaded log).
           (
             for _ in $(seq 1 150); do
               if grep -qE '^\[[0-9:]+ INFO\]: Done \(' logs/latest.log 2>/dev/null \
@@ -152,8 +172,13 @@ jobs:
               fi
               sleep 1
             done
-          ) | timeout 240 java -Xmx1536M -Xms1024M -jar paper.jar --nogui \
+          ) | timeout 240 java -Xmx3G -Xms1G \
+                -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 \
+                -jar paper.jar --nogui \
             || true
+
+          kill "$TAIL_PID" 2>/dev/null || true
+          wait "$TAIL_PID" 2>/dev/null || true
           echo "::endgroup::"
 
           echo "::group::Server log"
@@ -168,6 +193,20 @@ jobs:
 
           PLUGIN_NAME="AnarchyPhantoms"
           FAILED=0
+
+          # Check for a JVM-level death (OOM, crash) before assuming this is
+          # a plugin problem — these produce a tiny log with no plugin
+          # output at all, which otherwise looks confusingly like the
+          # plugin never got a chance to load.
+          if grep -qiE "java\.lang\.OutOfMemoryError|A fatal error has been detected by the Java Runtime Environment|Could not reserve enough space" "$LOG"; then
+            echo "::error::The JVM itself crashed or ran out of heap before the server finished starting (not a plugin error). Consider raising -Xmx further."
+            FAILED=1
+          fi
+
+          LOG_SIZE=$(wc -c < "$LOG")
+          if [ "$LOG_SIZE" -lt 500 ]; then
+            echo "::warning::logs/latest.log is only ${LOG_SIZE} bytes — the server likely died very early (before most logging even started), independent of plugin code."
+          fi
 
           if grep -qE "Error occurred while enabling $PLUGIN_NAME" "$LOG" \
              || grep -qE "Could not load '.*${{ steps.jar.outputs.name }}'" "$LOG" \
@@ -204,7 +243,7 @@ jobs:
       # from the Actions UI without re-running anything.
       - name: Upload server log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: paper-smoketest-log-${{ steps.sha.outputs.short }}
           path: ${{ runner.temp }}/paper-smoketest/logs/latest.log
@@ -212,7 +251,7 @@ jobs:
 
       # Always available under the workflow run's "Artifacts" section.
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ${{ steps.jar.outputs.name }}
           path: ${{ steps.jar.outputs.path }}
