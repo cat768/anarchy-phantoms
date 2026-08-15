@@ -1,0 +1,70 @@
+name: Build
+
+# Builds a jar on every push and names it anarchy-phantoms-git-<short-sha>.jar
+# (7-char short SHA, same format GitHub shows in the commit list/UI).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write # needed to publish/update the "latest" release below
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Compute short SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Build with Maven
+        run: mvn -B clean package
+
+      - name: Rename jar
+        id: jar
+        run: |
+          set -euo pipefail
+          src="$(find target -maxdepth 1 -name '*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' | head -n1)"
+          if [ -z "$src" ]; then
+            echo "No built jar found in target/" >&2
+            exit 1
+          fi
+          name="anarchy-phantoms-git-${{ steps.sha.outputs.short }}.jar"
+          cp "$src" "target/$name"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "path=target/$name" >> "$GITHUB_OUTPUT"
+
+      # Always available under the workflow run's "Artifacts" section.
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.jar.outputs.name }}
+          path: ${{ steps.jar.outputs.path }}
+          if-no-files-found: error
+
+      # Also publish to a rolling "latest" GitHub Release so there's a
+      # stable, linkable download URL that always points at the newest jar.
+      # Remove this step (and the `contents: write` permission above) if
+      # you only want the workflow-artifact download.
+      - name: Publish to "latest" release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: latest
+          name: Latest build (${{ steps.sha.outputs.short }})
+          body: |
+            Automated build from commit ${{ github.sha }}.
+            This tag is overwritten on every push to `main`.
+          prerelease: true
+          make_latest: false
+          files: ${{ steps.jar.outputs.path }}
