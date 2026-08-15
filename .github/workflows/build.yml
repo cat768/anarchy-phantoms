@@ -45,30 +45,64 @@ jobs:
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "path=target/$name" >> "$GITHUB_OUTPUT"
 
-      # Boots a real Paper 1.21.9 server with the freshly built jar dropped
-      # into plugins/, and checks that the plugin actually loads/enables
-      # rather than just compiling. Fails the job (with the plugin's own
-      # error printed) if it doesn't.
-      - name: Smoke test on Paper 1.21.9
+      # Boots a real Paper server with the freshly built jar dropped into
+      # plugins/, and checks that the plugin actually loads/enables rather
+      # than just compiling. Fails the job (with the plugin's own error
+      # printed) if it doesn't.
+      #
+      # The Minecraft version isn't hardcoded: Paper's Fill API only ever
+      # marks the current version's builds as STABLE, and that version
+      # changes every few weeks. A hardcoded version (e.g. "1.21.9") will
+      # eventually get superseded and break the workflow with
+      # "No stable Paper build found", even though nothing in this repo is
+      # wrong. Instead we ask Fill for the latest version, and if that
+      # version has no STABLE build yet (common right after a Minecraft
+      # release, before Paper promotes a build), we walk backwards through
+      # versions until we find one that does - exactly matching PaperMC's
+      # own documented fallback logic:
+      # https://docs.papermc.io/misc/downloads-service
+      - name: Smoke test on latest stable Paper
         id: smoke
         run: |
           set -uo pipefail
 
-          MC_VERSION="1.21.9"
           UA="anarchy-phantoms-ci/1.0 (https://github.com/${{ github.repository }})"
           WORKDIR="$RUNNER_TEMP/paper-smoketest"
           mkdir -p "$WORKDIR/plugins"
 
-          echo "::group::Resolving Paper $MC_VERSION build"
-          BUILDS=$(curl -sf -H "User-Agent: $UA" \
-            "https://fill.papermc.io/v3/projects/paper/versions/${MC_VERSION}/builds")
-          DOWNLOAD_URL=$(echo "$BUILDS" | jq -r \
-            'map(select(.channel == "STABLE")) | .[0].downloads."server:default".url // empty')
+          echo "::group::Resolving latest stable Paper build"
 
-          if [ -z "$DOWNLOAD_URL" ]; then
-            echo "::error::No stable Paper build found for Minecraft $MC_VERSION"
+          DOWNLOAD_URL=""
+          FOUND_VERSION=""
+
+          VERSIONS=$(curl -sf -H "User-Agent: $UA" "https://fill.papermc.io/v3/projects/paper" \
+            | jq -r '.versions | to_entries[] | .value[]' | sort -V -r)
+
+          if [ -z "$VERSIONS" ]; then
+            echo "::error::Could not fetch Paper version list from Fill API"
             exit 1
           fi
+
+          for MC_VERSION in $VERSIONS; do
+            echo "Checking $MC_VERSION for a stable build..."
+            BUILDS=$(curl -sf -H "User-Agent: $UA" \
+              "https://fill.papermc.io/v3/projects/paper/versions/${MC_VERSION}/builds") || continue
+            URL=$(echo "$BUILDS" | jq -r \
+              'map(select(.channel == "STABLE")) | .[0].downloads."server:default".url // empty')
+            if [ -n "$URL" ]; then
+              DOWNLOAD_URL="$URL"
+              FOUND_VERSION="$MC_VERSION"
+              break
+            fi
+          done
+
+          if [ -z "$DOWNLOAD_URL" ]; then
+            echo "::error::No stable Paper build found for any recent Minecraft version"
+            exit 1
+          fi
+
+          MC_VERSION="$FOUND_VERSION"
+          echo "Using Paper $MC_VERSION"
           echo "Downloading: $DOWNLOAD_URL"
           curl -sfL -H "User-Agent: $UA" -o "$WORKDIR/paper.jar" "$DOWNLOAD_URL"
           echo "::endgroup::"
