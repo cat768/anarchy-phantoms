@@ -237,9 +237,19 @@ jobs:
           cat logs/latest.log 2>/dev/null || echo "(no log produced)"
           echo "::endgroup::"
 
-          LOG="logs/latest.log"
-          if [ ! -f "$LOG" ]; then
-            echo "::error::Server produced no log file at all — it likely failed to start."
+          # Verdict is read from console.log, not logs/latest.log, for the
+          # same reason the watcher above uses it: log4j2's
+          # RollingRandomAccessFile appender buffers/flushes on its own
+          # schedule, so logs/latest.log can still be missing "Done" on
+          # disk even though the server printed it and shut down cleanly.
+          # Checking the buffered file here reintroduces the exact false
+          # "stalled boot" failure the watcher was already fixed to avoid.
+          # console.log (captured via `tee` on the JVM's raw stdout) is the
+          # same source of truth the watcher trusted to send "stop", so the
+          # pass/fail check must trust it too.
+          LOG="console.log"
+          if [ ! -f "$LOG" ] || [ ! -s "$LOG" ]; then
+            echo "::error::Server produced no console output at all — it likely failed to start."
             return 1
           fi
 
@@ -265,7 +275,7 @@ jobs:
 
           LOG_SIZE=$(wc -c < "$LOG")
           if [ "$LOG_SIZE" -lt 500 ]; then
-            echo "::warning::logs/latest.log is only ${LOG_SIZE} bytes — the server likely died very early (before most logging even started), independent of plugin code."
+            echo "::warning::$LOG is only ${LOG_SIZE} bytes — the server likely died very early (before most logging even started), independent of plugin code."
           fi
 
           if grep -qE "Error occurred while enabling $PLUGIN_NAME" "$LOG" \
@@ -333,14 +343,19 @@ jobs:
           done
           exit "$STATUS"
 
-      # Log is uploaded regardless of pass/fail so you can inspect a failure
-      # from the Actions UI without re-running anything.
+      # Logs are uploaded regardless of pass/fail so you can inspect a
+      # failure from the Actions UI without re-running anything. Both files
+      # are included: console.log is what the pass/fail verdict is actually
+      # based on (see the smoke test step), while logs/latest.log is
+      # Paper's own formatted log and easier to read by eye.
       - name: Upload server log
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: paper-smoketest-log-${{ steps.sha.outputs.short }}
-          path: ${{ runner.temp }}/paper-smoketest/logs/latest.log
+          path: |
+            ${{ runner.temp }}/paper-smoketest/logs/latest.log
+            ${{ runner.temp }}/paper-smoketest/console.log
           if-no-files-found: ignore
 
       # Always available under the workflow run's "Artifacts" section.
