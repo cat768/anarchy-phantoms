@@ -2,6 +2,7 @@ package com.anarchyphantoms.phantomcontrol;
 
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
+import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 
 /**
@@ -27,10 +28,20 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
         PhantomSpawnListener spawnListener = new PhantomSpawnListener(this);
         PhantomBehaviorListener behaviorListener = new PhantomBehaviorListener(this, provocationTracker);
         PhantomSoundListener soundListener = new PhantomSoundListener(this, provocationTracker);
+        PhantomEndSpawner endSpawner = new PhantomEndSpawner(this);
 
         getServer().getPluginManager().registerEvents(spawnListener, this);
         getServer().getPluginManager().registerEvents(behaviorListener, this);
         getServer().getPluginManager().registerEvents(soundListener, this);
+        getServer().getPluginManager().registerEvents(endSpawner, this);
+
+        // PlayerJoinEvent only fires for players connecting after this point,
+        // so anyone already online (e.g. this plugin was loaded via a
+        // server-wide /reload rather than a fresh boot) needs their spawn
+        // task started explicitly here too.
+        for (Player player : getServer().getOnlinePlayers()) {
+            endSpawner.startTaskForExisting(player);
+        }
 
         getLogger().info("AnarchyPhantoms phantom control enabled: End-only spawns, endstone/chorus surface required, passive until attacked.");
     }

@@ -27,3 +27,28 @@ phantoms:
   # attacked, and after which it reverts to passive/silent if left alone.
   # Set to -1 to make provocation permanent for that phantom's lifetime.
   provoked-duration-ticks: 6000
+
+  # Active End spawning. Vanilla has NO natural phantom spawn cycle in The
+  # End at all (phantoms are Overworld-only, gated by 3 in-game sleepless
+  # days). Without this section, PhantomSpawnListener's End/surface rules
+  # above have nothing to filter, since nothing ever attempts to spawn a
+  # phantom there naturally. This section makes the plugin actively spawn
+  # phantoms above players in The End, mirroring 2b2t's "Phantoms In The
+  # End" behavior. Deliberately NOT gated by Overworld sleep/insomnia -
+  # The End has no beds or day/night cycle, so that stat is meaningless here.
+  end-spawning:
+    # Master switch for actively spawning phantoms in The End.
+    enabled: true
+
+    # Chance, per player, per check interval (every 10 seconds), that a
+    # spawn attempt is made. 0.15 means roughly a 15% chance every 10s,
+    # i.e. a spawn attempt on average every ~67 seconds per eligible player.
+    spawn-chance: 0.15
+
+    # Radius (in blocks) used both to count existing nearby phantoms (for
+    # max-phantoms-per-player) and as the general "near this player" range.
+    spawn-check-radius: 32.0
+
+    # Per-player cap: stop spawning more phantoms near a player once this
+    # many are already within spawn-check-radius of them.
+    max-phantoms-per-player: 4

@@ -22,6 +22,10 @@ public final class PluginSettings {
     private boolean passiveUntilAttacked;
     private boolean silenceScreechUntilAttacked;
     private long provokedDurationTicks;
+    private boolean endSpawningEnabled;
+    private double endSpawnChance;
+    private double spawnCheckRadius;
+    private int maxPhantomsPerPlayer;
 
     public PluginSettings(AnarchyPhantomsPlugin plugin) {
         this.plugin = plugin;
@@ -38,6 +42,10 @@ public final class PluginSettings {
         this.passiveUntilAttacked = config.getBoolean("phantoms.passive-until-attacked", true);
         this.silenceScreechUntilAttacked = config.getBoolean("phantoms.silence-screech-until-attacked", true);
         this.provokedDurationTicks = config.getLong("phantoms.provoked-duration-ticks", 6000);
+        this.endSpawningEnabled = config.getBoolean("phantoms.end-spawning.enabled", true);
+        this.endSpawnChance = clamp01(config.getDouble("phantoms.end-spawning.spawn-chance", 0.15));
+        this.spawnCheckRadius = Math.max(1.0, config.getDouble("phantoms.end-spawning.spawn-check-radius", 32.0));
+        this.maxPhantomsPerPlayer = Math.max(0, config.getInt("phantoms.end-spawning.max-phantoms-per-player", 4));
 
         List<String> materialNames = config.getStringList("phantoms.allowed-surface-blocks");
         EnumSet<Material> materials = EnumSet.noneOf(Material.class);
@@ -84,5 +92,25 @@ public final class PluginSettings {
 
     public long getProvokedDurationTicks() {
         return provokedDurationTicks;
+    }
+
+    public boolean isEndSpawningEnabled() {
+        return endSpawningEnabled;
+    }
+
+    public double getEndSpawnChance() {
+        return endSpawnChance;
+    }
+
+    public double getSpawnCheckRadius() {
+        return spawnCheckRadius;
+    }
+
+    public int getMaxPhantomsPerPlayer() {
+        return maxPhantomsPerPlayer;
+    }
+
+    private static double clamp01(double value) {
+        return Math.max(0.0, Math.min(1.0, value));
     }
 }

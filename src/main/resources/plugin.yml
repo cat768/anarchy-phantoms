@@ -2,7 +2,7 @@ name: AnarchyPhantoms
 version: '1.0.0'
 main: com.anarchyphantoms.phantomcontrol.AnarchyPhantomsPlugin
 api-version: '1.21'
-description: End-only phantom spawning restricted to endstone/chorus surfaces, passive until attacked, silent screech until provoked.
+description: Actively spawns phantoms in The End (endstone/chorus surfaces only), passive until attacked, silent screech until provoked.
 author: AnarchyPhantoms
 folia-supported: true
 
