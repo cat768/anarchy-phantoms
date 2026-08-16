@@ -344,7 +344,16 @@ jobs:
           if-no-files-found: ignore
 
       # Always available under the workflow run's "Artifacts" section.
+      #
+      # if: always() (guarded by checking the jar-rename step actually
+      # succeeded) so that a smoke-test failure - which can be a genuine
+      # CI-runner stall rather than a real plugin bug (see the smoke test
+      # step's own STALL_ONLY logic above) - does NOT block you from
+      # getting the jar Maven already successfully built. Without this,
+      # a flaky shared-runner boot could deny you a working jar for a
+      # reason that has nothing to do with your code.
       - name: Upload build artifact
+        if: always() && steps.jar.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.jar.outputs.name }}
@@ -355,7 +364,11 @@ jobs:
       # stable, linkable download URL that always points at the newest jar.
       # Remove this step (and the `contents: write` permission above) if
       # you only want the workflow-artifact download.
+      #
+      # Same if: always() reasoning as above - only skipped if the jar
+      # itself was never produced.
       - name: Publish to "latest" release
+        if: always() && steps.jar.outcome == 'success'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: latest
