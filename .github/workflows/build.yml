@@ -45,6 +45,15 @@ jobs:
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "path=target/$name" >> "$GITHUB_OUTPUT"
 
+          # A second, sha-agnostic copy for the rolling "latest" release.
+          # Keeping this name stable (rather than sha-suffixed) means the
+          # download URL under the "latest" release never changes between
+          # builds - only the file's contents do.
+          latest_name="anarchy-phantoms-latest.jar"
+          cp "$src" "target/$latest_name"
+          echo "latest_name=$latest_name" >> "$GITHUB_OUTPUT"
+          echo "latest_path=target/$latest_name" >> "$GITHUB_OUTPUT"
+
       # Boots a real Paper server with the freshly built jar dropped into
       # plugins/, and checks that the plugin actually loads/enables rather
       # than just compiling. Fails the job (with the plugin's own error
@@ -375,10 +384,32 @@ jobs:
           path: ${{ steps.jar.outputs.path }}
           if-no-files-found: error
 
+      # Publish each commit's jar to its own permanent, per-commit release
+      # so historical builds stay downloadable by sha after "latest" below
+      # moves on. clean: false (the default) is fine here since each of
+      # these tags/releases is only ever written to once.
+      - name: Publish per-commit release
+        if: always() && steps.jar.outcome == 'success'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: git-${{ steps.sha.outputs.short }}
+          name: Build ${{ steps.sha.outputs.short }}
+          body: |
+            Automated build from commit ${{ github.sha }}.
+            This is a permanent, immutable release for this specific commit.
+          prerelease: true
+          make_latest: false
+          files: ${{ steps.jar.outputs.path }}
+
       # Also publish to a rolling "latest" GitHub Release so there's a
       # stable, linkable download URL that always points at the newest jar.
       # Remove this step (and the `contents: write` permission above) if
       # you only want the workflow-artifact download.
+      #
+      # clean: true wipes any assets left over from a previous run before
+      # uploading the new one - without this, softprops/action-gh-release
+      # only appends, so every build's jar piled up on this one release
+      # instead of the tag actually being replaced.
       #
       # Same if: always() reasoning as above - only skipped if the jar
       # itself was never produced.
@@ -390,7 +421,10 @@ jobs:
           name: Latest build (${{ steps.sha.outputs.short }})
           body: |
             Automated build from commit ${{ github.sha }}.
-            This tag is overwritten on every push to `main`.
+            This tag/release is overwritten on every push to `main` - only
+            the newest jar is kept here. For older builds, see the
+            per-commit `git-<sha>` releases.
           prerelease: true
           make_latest: false
-          files: ${{ steps.jar.outputs.path }}
+          clean: true
+          files: ${{ steps.jar.outputs.latest_path }}
