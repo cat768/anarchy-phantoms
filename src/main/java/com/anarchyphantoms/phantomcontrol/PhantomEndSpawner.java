@@ -82,6 +82,7 @@ public final class PhantomEndSpawner implements Listener {
     private void tryEndSpawn(Player player) {
         PluginSettings settings = plugin.getSettings();
         if (!settings.isEndSpawningEnabled()) {
+            debug(player, "end-spawning disabled in config");
             return;
         }
         if (!player.isOnline() || !player.isValid()) {
@@ -90,23 +91,31 @@ public final class PhantomEndSpawner implements Listener {
 
         World world = player.getWorld();
         if (world.getEnvironment() != World.Environment.THE_END) {
+            debug(player, "not in The End (env=" + world.getEnvironment() + ")");
             return;
         }
 
         // Per-tick-cycle random chance, similar in spirit to vanilla's own
         // "attempt every so often, not guaranteed" phantom spawn behavior.
-        if (random.nextDouble() > settings.getEndSpawnChance()) {
+        double roll = random.nextDouble();
+        if (roll > settings.getEndSpawnChance()) {
+            debug(player, "chance roll failed (" + roll + " > " + settings.getEndSpawnChance() + ")");
             return;
         }
 
-        if (countNearbyPhantoms(player, settings.getSpawnCheckRadius()) >= settings.getMaxPhantomsPerPlayer()) {
+        int nearby = countNearbyPhantoms(player, settings.getSpawnCheckRadius());
+        if (nearby >= settings.getMaxPhantomsPerPlayer()) {
+            debug(player, "at phantom cap (" + nearby + "/" + settings.getMaxPhantomsPerPlayer() + " within " + settings.getSpawnCheckRadius() + " blocks)");
             return;
         }
 
+        debug(player, "roll passed (" + roll + " <= " + settings.getEndSpawnChance() + "), nearby=" + nearby + ", attempting to pick location");
         Location spawnLocation = pickSpawnLocation(player, settings);
         if (spawnLocation == null) {
+            debug(player, "pickSpawnLocation returned null (no valid surface below candidate point)");
             return;
         }
+        debug(player, "valid location found at " + spawnLocation.getBlockX() + "," + spawnLocation.getBlockY() + "," + spawnLocation.getBlockZ() + ", spawning phantom");
 
         // World#spawn(..., SpawnReason) fires CreatureSpawnEvent with the
         // given reason. We pass NATURAL so PhantomSpawnListener's existing
@@ -127,8 +136,22 @@ public final class PhantomEndSpawner implements Listener {
             // PhantomSpawnListener vetoed it (e.g. surface check failed due
             // to a race between our pickSpawnLocation and the world since),
             // or something else removed it immediately. Nothing further to do.
+            debug(player, "world.spawn() call was vetoed (likely by PhantomSpawnListener or another plugin)");
             return;
         }
+        debug(player, "phantom spawn SUCCEEDED at " + spawnLocation.getBlockX() + "," + spawnLocation.getBlockY() + "," + spawnLocation.getBlockZ());
+    }
+
+    /**
+     * Logs a debug line to console only if debug mode is currently on
+     * (config default, or runtime-toggled via /ap debug). Never sent to
+     * players in chat - console/log-file only, regardless of who is op.
+     */
+    private void debug(Player player, String message) {
+        if (!plugin.getSettings().isDebugEnabled()) {
+            return;
+        }
+        plugin.getLogger().info("[AP-DEBUG] " + player.getName() + ": " + message);
     }
 
     /**
