@@ -32,8 +32,6 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(behaviorListener, this);
         getServer().getPluginManager().registerEvents(soundListener, this);
 
-        soundListener.startRecheckTask();
-
         getLogger().info("AnarchyPhantoms phantom control enabled: End-only spawns, endstone/chorus surface required, passive until attacked.");
     }
 

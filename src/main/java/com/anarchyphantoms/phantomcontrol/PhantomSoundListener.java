@@ -6,7 +6,6 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntitySpawnEvent;
-import org.bukkit.scheduler.BukkitTask;
 
 /**
  * Suppresses the phantom's ambient "screech" sound (and other vocalizations)
@@ -25,8 +24,28 @@ import org.bukkit.scheduler.BukkitTask;
  *  - A phantom is un-silenced the moment it's marked provoked (on damage).
  *  - Because provocation can be time-limited (see
  *    PluginSettings#getProvokedDurationTicks / PhantomBehaviorListener),
- *    a lightweight repeating task periodically re-silences phantoms whose
- *    provocation window has expired.
+ *    each phantom schedules its own repeating recheck via its
+ *    per-entity EntityScheduler (Entity#getScheduler()) rather than a
+ *    single global sweep.
+ *
+ * Folia note: a single repeating task that iterates every loaded phantom
+ * (e.g. via a GlobalRegionScheduler or legacy BukkitScheduler task calling
+ * world.getEntitiesByClass(...) and then touching each entity) is NOT safe
+ * on Folia. Entities are owned by whichever region is currently ticking
+ * them, and Folia throws IllegalStateException ("Accessing entity state
+ * off owning region's thread") if you read/write entity state from a
+ * thread that doesn't own that entity - the global region only owns
+ * world/weather/time-level state, not arbitrary entities in it (see
+ * https://github.com/PaperMC/Folia/issues/184, closed won't-fix as
+ * intended behavior). The legacy BukkitScheduler has the same problem
+ * plus is unsupported on Folia outright.
+ *
+ * The correct fix is Entity#getScheduler(): each phantom's EntityScheduler
+ * always runs on the thread that currently owns that specific entity,
+ * following it across regions, and on regular Paper it's internally
+ * handled to behave like a normal repeating task. So instead of one
+ * global "check every phantom" task, every phantom is given its own
+ * repeating task the moment it spawns.
  */
 public final class PhantomSoundListener implements Listener {
 
@@ -35,43 +54,16 @@ public final class PhantomSoundListener implements Listener {
     private final AnarchyPhantomsPlugin plugin;
     private final PhantomProvocationTracker tracker;
 
-    private BukkitTask recheckTask;
-
     public PhantomSoundListener(AnarchyPhantomsPlugin plugin, PhantomProvocationTracker tracker) {
         this.plugin = plugin;
         this.tracker = tracker;
     }
 
     /**
-     * Registers this listener's periodic re-check task. Call once from the
-     * plugin's onEnable, after the listener itself has been registered with
-     * the PluginManager.
-     */
-    public void startRecheckTask() {
-        if (recheckTask != null) {
-            return;
-        }
-        recheckTask = plugin.getServer().getScheduler().runTaskTimer(
-                plugin,
-                this::recheckAllPhantoms,
-                RECHECK_INTERVAL_TICKS,
-                RECHECK_INTERVAL_TICKS
-        );
-    }
-
-    /**
-     * Cancels the periodic re-check task. Call from the plugin's onDisable.
-     */
-    public void stopRecheckTask() {
-        if (recheckTask != null) {
-            recheckTask.cancel();
-            recheckTask = null;
-        }
-    }
-
-    /**
      * Freshly spawned phantoms start silent, matching the passive-until-attacked
-     * behavior in PhantomBehaviorListener.
+     * behavior in PhantomBehaviorListener, and get their own recheck task so a
+     * time-limited provocation window expiring (which fires no event) still
+     * gets caught and re-silenced.
      */
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPhantomSpawn(EntitySpawnEvent event) {
@@ -82,6 +74,31 @@ public final class PhantomSoundListener implements Listener {
             return;
         }
         phantom.setSilent(true);
+        startRecheckTask(phantom);
+    }
+
+    /**
+     * Schedules this phantom's own periodic re-sync via its EntityScheduler.
+     * EntityScheduler guarantees the task callback only ever runs on the
+     * thread/region that currently owns this exact entity, following it if
+     * it changes regions. If the phantom is removed (killed, unloaded and
+     * never rejoins, etc.) before a run, the "retired" callback fires
+     * instead and the repeating schedule stops on its own - no manual
+     * cancel/teardown bookkeeping needed here.
+     */
+    private void startRecheckTask(Phantom phantom) {
+        phantom.getScheduler().runAtFixedRate(
+                plugin,
+                task -> {
+                    if (!plugin.getSettings().isSilenceScreechUntilAttacked()) {
+                        return;
+                    }
+                    syncSilentState(phantom);
+                },
+                null, // retired callback: entity is already gone, nothing to clean up
+                RECHECK_INTERVAL_TICKS,
+                RECHECK_INTERVAL_TICKS
+        );
     }
 
     /**
@@ -101,20 +118,6 @@ public final class PhantomSoundListener implements Listener {
         if (tracker.isProvoked(phantom)) {
             phantom.setSilent(false);
         }
-    }
-
-    /**
-     * Periodically re-syncs silent state for all loaded phantoms, in case a
-     * time-limited provocation window has expired (nothing fires an event
-     * when time simply passes, so this has to be polled).
-     */
-    private void recheckAllPhantoms() {
-        if (!plugin.getSettings().isSilenceScreechUntilAttacked()) {
-            return;
-        }
-        plugin.getServer().getWorlds().forEach(world ->
-                world.getEntitiesByClass(Phantom.class).forEach(this::syncSilentState)
-        );
     }
 
     private void syncSilentState(Phantom phantom) {
