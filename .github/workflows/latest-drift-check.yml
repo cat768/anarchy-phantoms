@@ -1,0 +1,101 @@
+name: Latest tag drift check
+
+# Self-heals the rolling "latest" release if it ever falls behind main.
+#
+# build.yml is what actually builds+smoke-tests+publishes "latest" on every
+# push, and normally that's sufficient on its own. This workflow is the
+# safety net for the case where a build.yml run reports success but "latest"
+# still didn't end up moving forward (e.g. the publish step's conditions
+# didn't fire the way expected, or the release action silently no-op'd) -
+# nothing about a green build.yml run actually proves "latest" moved.
+#
+# Trigger: fires the moment build.yml finishes on main, via workflow_run -
+# no polling delay, no schedule. The job itself then skips unless that
+# build.yml run concluded successfully (see the job-level `if` below).
+#
+# It doesn't republish "latest" itself - it compares COMMIT TIMESTAMPS (not
+# shas) between main's tip and whatever "latest" currently points to, and if
+# main is newer, it re-dispatches build.yml against main's current tip so
+# the real pipeline (build + smoke test + publish) stays the single source
+# of truth instead of duplicating publish logic here.
+on:
+  workflow_run:
+    workflows: ["Build"]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch: {} # manual escape hatch, e.g. after editing this file
+
+permissions:
+  contents: read
+  actions: write # needed to dispatch build.yml when drift is found
+
+jobs:
+  check-drift:
+    # Only act on a build.yml run that actually succeeded. If build.yml
+    # itself failed (e.g. Maven build broke, no jar was ever produced),
+    # re-dispatching it here would just fail again for the same reason and
+    # spin - that's a real bug to go look at, not drift to self-heal.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          # workflow_run events don't check out the triggering commit by
+          # default - pin explicitly to main so this always reads main's
+          # actual current tip, regardless of which ref/sha kicked it off.
+          ref: main
+          fetch-depth: 0 # need full history to read tag/branch commit dates
+
+      - name: Compare main vs latest by commit timestamp
+        id: drift
+        run: |
+          set -euo pipefail
+
+          MAIN_SHA="$(git rev-parse main)"
+          MAIN_TS="$(git log -1 --format=%ct "$MAIN_SHA")"
+
+          if git rev-parse latest >/dev/null 2>&1; then
+            LATEST_SHA="$(git rev-parse latest)"
+            LATEST_TS="$(git log -1 --format=%ct "$LATEST_SHA")"
+          else
+            # No "latest" tag exists yet at all - treat as maximally stale.
+            LATEST_SHA="(none)"
+            LATEST_TS=0
+          fi
+
+          echo "main:   $MAIN_SHA @ $MAIN_TS ($(date -u -d "@$MAIN_TS" +'%Y-%m-%d %H:%M:%S UTC'))"
+          echo "latest: $LATEST_SHA @ $LATEST_TS ($( [ "$LATEST_TS" != 0 ] && date -u -d "@$LATEST_TS" +'%Y-%m-%d %H:%M:%S UTC' || echo n/a ))"
+
+          if [ "$MAIN_SHA" = "$LATEST_SHA" ]; then
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+            echo "In sync: latest already points at main's tip."
+          elif [ "$MAIN_TS" -gt "$LATEST_TS" ]; then
+            DRIFT=$(( MAIN_TS - LATEST_TS ))
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+            echo "main_sha=$MAIN_SHA" >> "$GITHUB_OUTPUT"
+            echo "::warning::'latest' is stale by ${DRIFT}s: main ($MAIN_SHA) is newer than latest ($LATEST_SHA)."
+          else
+            # latest is at least as new as main by timestamp but sha differs
+            # (e.g. a force-push rewrote history) - don't touch it
+            # automatically, just surface it.
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::'latest' sha differs from main's tip but is not older by timestamp (possible force-push/rebase) - leaving as-is."
+          fi
+
+      - name: Re-trigger build.yml on main's current tip
+        if: steps.drift.outputs.stale == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "Dispatching build.yml against main to republish 'latest'..."
+          gh workflow run build.yml --ref main
+          echo "## 🔁 Drift detected - re-triggered build" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`latest\` was behind \`main\` (${{ steps.drift.outputs.main_sha }}) by commit timestamp." >> "$GITHUB_STEP_SUMMARY"
+          echo "Dispatched \`build.yml\` on \`main\` to rebuild, smoke-test, and republish \`latest\`." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summary (in sync)
+        if: steps.drift.outputs.stale != 'true'
+        run: |
+          echo "## ✅ 'latest' is in sync with main" >> "$GITHUB_STEP_SUMMARY"
