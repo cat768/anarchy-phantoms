@@ -112,7 +112,7 @@ public final class PhantomEndSpawner implements Listener {
         debug(player, "roll passed (" + roll + " <= " + settings.getEndSpawnChance() + "), nearby=" + nearby + ", attempting to pick location");
         Location spawnLocation = pickSpawnLocation(player, settings);
         if (spawnLocation == null) {
-            debug(player, "pickSpawnLocation returned null (no valid surface below candidate point)");
+            debug(player, "pickSpawnLocation returned null (no allowed surface block found in the sampled column)");
             return;
         }
         debug(player, "valid location found at " + spawnLocation.getBlockX() + "," + spawnLocation.getBlockY() + "," + spawnLocation.getBlockZ() + ", spawning phantom");
@@ -155,11 +155,24 @@ public final class PhantomEndSpawner implements Listener {
     }
 
     /**
-     * Picks a location above the player, biased upward like vanilla phantom
-     * spawns, and directly validates it sits above an allowed surface within
-     * the configured search depth - the same rule PhantomSpawnListener
-     * enforces, checked here first so we don't waste a spawn attempt (and
-     * the associated event overhead) on an obviously bad spot.
+     * Picks a location above an actual, known allowed surface near the
+     * player, biased upward like vanilla phantom spawns.
+     *
+     * This deliberately does NOT probe downward from a random high point
+     * above the player's current Y. Doing so requires a valid surface block
+     * to happen to fall within a short search depth below a point that is
+     * itself minHeightAbove-maxHeightAbove blocks above the player - on the
+     * End's main island (surface ~Y=64-70, phantom spawn candidates picked
+     * 20-30 blocks above that), the real ground is far outside that search
+     * window almost every attempt, so it would silently fail almost always.
+     * It's also wrong if the player is themselves airborne (elytra, falling,
+     * standing on a boat over the void): "above the player" doesn't imply
+     * "above solid ground" at all.
+     *
+     * Instead we find the real ground height under a randomly offset column
+     * near the player first (World#getHighestBlockYAt), confirm that block
+     * is an allowed surface, and only then place the phantom above that
+     * known-good point.
      */
     private Location pickSpawnLocation(Player player, PluginSettings settings) {
         Location base = player.getLocation();
@@ -175,42 +188,45 @@ public final class PhantomEndSpawner implements Listener {
 
         int dx = rnd.nextInt(-horizontalSpread, horizontalSpread + 1);
         int dz = rnd.nextInt(-horizontalSpread, horizontalSpread + 1);
-        int dy = rnd.nextInt(minHeightAbove, maxHeightAbove + 1);
+        int x = base.getBlockX() + dx;
+        int z = base.getBlockZ() + dz;
 
-        Location candidate = base.clone().add(dx, dy, dz);
-        candidate.setY(Math.min(candidate.getY(), world.getMaxHeight() - 1));
-
-        if (!hasValidSurfaceBelow(candidate, world, settings)) {
+        Integer groundY = findAllowedSurfaceY(world, x, z, settings);
+        if (groundY == null) {
             return null;
         }
 
-        return candidate;
+        int dy = rnd.nextInt(minHeightAbove, maxHeightAbove + 1);
+        int spawnY = Math.min(groundY + dy, world.getMaxHeight() - 1);
+
+        return new Location(world, x + 0.5, spawnY, z + 0.5);
     }
 
     /**
-     * Same walk-downward logic as PhantomSpawnListener#isAboveAllowedSurface,
-     * duplicated intentionally: this is a cheap pre-check to avoid pointless
-     * spawn attempts, while PhantomSpawnListener remains the authoritative
-     * gate that actually allows/cancels the resulting CreatureSpawnEvent.
+     * Finds the Y of the highest non-air block in this column (the real
+     * "ground" a player standing here would land on) and returns it only if
+     * that block's material is an allowed surface block. Returns null if the
+     * column has no blocks (open void) or its surface isn't allowed
+     * (e.g. an outer-islands chorus-free column, or bedrock/void terrain).
+     *
+     * World#getHighestBlockYAt already skips leaves/logs-as-ground the way
+     * you'd want for a "top of the world" query, and in The End there's no
+     * tree canopy to worry about anyway - the highest block in a column on
+     * the main island is end stone, and on outer islands is end stone or a
+     * chorus plant.
      */
-    private boolean hasValidSurfaceBelow(Location location, World world, PluginSettings settings) {
-        int startY = location.getBlockY();
-        int minY = world.getMinHeight();
-        int depth = settings.getSurfaceCheckDepth();
-
-        for (int i = 1; i <= depth; i++) {
-            int y = startY - i;
-            if (y < minY) {
-                break;
-            }
-            Block block = world.getBlockAt(location.getBlockX(), y, location.getBlockZ());
-            Material type = block.getType();
-            if (type == Material.AIR || type == Material.CAVE_AIR || type == Material.VOID_AIR) {
-                continue;
-            }
-            return settings.getAllowedSurfaceBlocks().contains(type);
+    private Integer findAllowedSurfaceY(World world, int x, int z, PluginSettings settings) {
+        int highestY = world.getHighestBlockYAt(x, z);
+        if (highestY <= world.getMinHeight()) {
+            return null; // nothing but void in this column
         }
-        return false;
+
+        Block block = world.getBlockAt(x, highestY, z);
+        if (!settings.getAllowedSurfaceBlocks().contains(block.getType())) {
+            return null;
+        }
+
+        return highestY;
     }
 
     private int countNearbyPhantoms(Player player, double radius) {
