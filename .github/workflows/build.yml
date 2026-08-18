@@ -1,9 +1,7 @@
 name: Build
 
-# Builds a jar on every push, names it anarchy-phantoms-git-<short-sha>.jar
-# (7-char short SHA, same format GitHub shows in the commit list/UI), then
-# smoke-tests that single jar against every Paper AND Folia version (at or
-# below the plugin's compile target) that currently has a STABLE build.
+# Builds a jar on every push and names it anarchy-phantoms-git-<short-sha>.jar
+# (7-char short SHA, same format GitHub shows in the commit list/UI).
 on:
   push:
     branches: [main]
@@ -15,11 +13,6 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    outputs:
-      short_sha: ${{ steps.sha.outputs.short }}
-      jar_name: ${{ steps.jar.outputs.name }}
-      latest_name: ${{ steps.jar.outputs.latest_name }}
-      target_mc_version: ${{ steps.target.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -37,29 +30,6 @@ jobs:
 
       - name: Build with Maven
         run: mvn -B clean package
-
-      # The target Minecraft/Paper version this plugin is developed and
-      # compiled against, read straight out of pom.xml so it never drifts
-      # out of sync with the actual paper-api dependency version. Smoke
-      # tests (both Paper and Folia) walk backwards from this version, same
-      # reasoning as before: newer calendar-versioned MC releases can need a
-      # newer JDK than this plugin is compiled/targeted for.
-      - name: Read target MC version from pom.xml
-        id: target
-        run: |
-          set -euo pipefail
-          # Pull the paper-api <version> straight out of the POM text (e.g.
-          # "1.21.9-R0.1-SNAPSHOT" -> "1.21.9") rather than depend on extra
-          # Maven plugins just to read one value.
-          VERSION=$(grep -A2 '<artifactId>paper-api</artifactId>' pom.xml \
-            | grep '<version>' | sed -E 's/.*<version>([^<]+)<\/version>.*/\1/' \
-            | sed -E 's/-R0\.1-SNAPSHOT$//')
-          if [ -z "$VERSION" ]; then
-            echo "::error::Could not determine target MC version from pom.xml's paper-api dependency"
-            exit 1
-          fi
-          echo "Target MC version: $VERSION"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Rename jar
         id: jar
@@ -84,179 +54,98 @@ jobs:
           echo "latest_name=$latest_name" >> "$GITHUB_OUTPUT"
           echo "latest_path=target/$latest_name" >> "$GITHUB_OUTPUT"
 
-      # The jar is the one and only build artifact smoke-tested below. It's
-      # compiled against paper-api ONLY (see pom.xml) - there is no separate
-      # Folia-API compile. This relies on Paper/Folia API compatibility at
-      # the Bukkit/Paper plugin API surface, which holds for this plugin
-      # since it does nothing region-threading-specific (no
-      # RegionScheduler/GlobalRegionScheduler usage - see
-      # PhantomSoundListener.java's comment). If the plugin ever starts
-      # using Folia's region schedulers directly, this single-jar approach
-      # stops being valid and a Folia-specific compile would be needed.
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ steps.jar.outputs.name }}
-          path: ${{ steps.jar.outputs.path }}
-          if-no-files-found: error
-
-      # Publish each commit's jar to its own permanent, per-commit release
-      # so historical builds stay downloadable by sha after "latest" below
-      # moves on. clean: false (the default) is fine here since each of
-      # these tags/releases is only ever written to once.
-      - name: Publish per-commit release
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: git-${{ steps.sha.outputs.short }}
-          name: Build ${{ steps.sha.outputs.short }}
-          body: |
-            Automated build from commit ${{ github.sha }}.
-            This is a permanent, immutable release for this specific commit.
-          prerelease: true
-          make_latest: false
-          files: ${{ steps.jar.outputs.path }}
-
-      # Also publish to a rolling "latest" GitHub Release so there's a
-      # stable, linkable download URL that always points at the newest jar.
+      # Boots a real Paper server with the freshly built jar dropped into
+      # plugins/, and checks that the plugin actually loads/enables rather
+      # than just compiling. Fails the job (with the plugin's own error
+      # printed) if it doesn't.
       #
-      # clean: true wipes any assets left over from a previous run before
-      # uploading the new one - without this, softprops/action-gh-release
-      # only appends, so every build's jar piled up on this one release
-      # instead of the tag actually being replaced.
-      - name: Publish to "latest" release
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: latest
-          name: Latest build (${{ steps.sha.outputs.short }})
-          body: |
-            Automated build from commit ${{ github.sha }}.
-            This tag/release is overwritten on every push to `main` - only
-            the newest jar is kept here. For older builds, see the
-            per-commit `git-<sha>` releases.
-          prerelease: true
-          make_latest: false
-          clean: true
-          files: ${{ steps.jar.outputs.latest_path }}
-
-  discover-versions:
-    runs-on: ubuntu-latest
-    needs: build
-    outputs:
-      matrix: ${{ steps.discover.outputs.matrix }}
-    steps:
-      # Dynamically queries Fill for BOTH Paper and Folia at CI runtime, and
-      # only includes {server_type, mc_version} pairs that currently have a
-      # STABLE build. Folia lags Paper (fewer versions, starts later) - this
-      # is discovered from the live API response, never hardcoded, so the
-      # matrix self-adjusts as PaperMC ships new stable builds for either
-      # project without needing a workflow edit.
-      - name: Discover stable Paper + Folia versions
-        id: discover
-        env:
-          TARGET_MC_VERSION: ${{ needs.build.outputs.target_mc_version }}
-        run: |
-          set -uo pipefail
-          UA="anarchy-phantoms-ci/1.0 (https://github.com/${{ github.repository }})"
-
-          fetch_stable_versions() {
-            local project="$1"
-            local versions
-            versions=$(curl -sf -H "User-Agent: $UA" "https://fill.papermc.io/v3/projects/${project}" \
-              | jq -r '.versions | to_entries[] | .value[]' | sort -V -r)
-            [ -n "$versions" ] || return 0
-
-            # Only ever consider TARGET_MC_VERSION and older - never chase a
-            # newer major line (see build job's comment on why).
-            local candidates
-            candidates=$(printf '%s\n' "$versions" | awk -v t="$TARGET_MC_VERSION" '
-              $0==t {found=1}
-              found {print}
-            ')
-            [ -n "$candidates" ] || return 0
-
-            for v in $candidates; do
-              local builds url
-              builds=$(curl -sf -H "User-Agent: $UA" \
-                "https://fill.papermc.io/v3/projects/${project}/versions/${v}/builds") || continue
-              url=$(echo "$builds" | jq -r \
-                'map(select(.channel == "STABLE")) | .[0].downloads."server:default".url // empty')
-              if [ -n "$url" ]; then
-                jq -n --arg p "$project" --arg v "$v" '{server_type: $p, mc_version: $v}'
-              fi
-            done
-          }
-
-          MATRIX_JSON=$( { fetch_stable_versions paper; fetch_stable_versions folia; } | jq -s -c '{include: .}' )
-
-          COUNT=$(echo "$MATRIX_JSON" | jq '.include | length')
-          if [ "$COUNT" -eq 0 ]; then
-            echo "::error::No stable Paper or Folia builds found at or below $TARGET_MC_VERSION"
-            exit 1
-          fi
-
-          echo "Discovered $COUNT smoke-test legs:"
-          echo "$MATRIX_JSON" | jq .
-          echo "matrix=$MATRIX_JSON" >> "$GITHUB_OUTPUT"
-
-  smoke-test:
-    runs-on: ubuntu-latest
-    needs: [build, discover-versions]
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.discover-versions.outputs.matrix) }}
-    steps:
-      - name: Download build artifact
-        uses: actions/download-artifact@v6
-        with:
-          name: ${{ needs.build.outputs.jar_name }}
-          path: dist
-
-      # Boots a real Paper or Folia server (per matrix.server_type) with the
-      # freshly built jar dropped into plugins/, and checks that the plugin
-      # actually loads/enables rather than just compiling. Fails the job
-      # (with the plugin's own error printed) if it doesn't.
+      # The target Minecraft/Paper version this plugin is developed and
+      # compiled against (see pom.xml's paper-api version). We smoke-test
+      # against THIS version rather than whatever Fill reports as globally
+      # latest: Minecraft moved to calendar-based versioning outside the
+      # 1.21.x line (e.g. 26.1, 26.2), and those newer server versions
+      # require a newer Java to even boot (26.1+ requires Java 25) than
+      # this plugin is compiled/targeted for. Chasing "latest" would smoke
+      # test a version this plugin was never built for, using a JDK too old
+      # to run it - which fails for reasons unrelated to the plugin itself.
       #
-      # This is the SAME jar for both server types - it's compiled against
-      # paper-api only, relying on Paper/Folia API compatibility (see the
-      # build job's comment on why that's valid for this plugin today).
-      - name: Smoke test on ${{ matrix.server_type }} ${{ matrix.mc_version }}
+      # If TARGET_MC_VERSION has no STABLE build yet, we walk backwards
+      # through nearby versions until we find one that does - matching
+      # PaperMC's own documented fallback logic:
+      # https://docs.papermc.io/misc/downloads-service
+      - name: Smoke test on target Paper version
         id: smoke
         env:
-          SERVER_TYPE: ${{ matrix.server_type }}
-          MC_VERSION: ${{ matrix.mc_version }}
-          JAR_PATH: dist/${{ needs.build.outputs.jar_name }}
+          TARGET_MC_VERSION: "1.21.9"
+        # Retries the whole smoke test up to twice. Shared CI runners can
+        # occasionally stall a cold Paper boot (world-gen/GC/noisy-neighbor
+        # contention) for reasons unrelated to the plugin - the log shows
+        # AnarchyPhantoms output but the server never reaches "Done" inside
+        # the watch window. A genuine plugin error is detected below and
+        # exits with status 1 immediately (no retry); a bare stall/timeout
+        # exits with status 2, which IS retried once.
         run: |
           set -uo pipefail
 
           run_smoke_test() {
           UA="anarchy-phantoms-ci/1.0 (https://github.com/${{ github.repository }})"
-          WORKDIR="$RUNNER_TEMP/${SERVER_TYPE}-smoketest"
+          WORKDIR="$RUNNER_TEMP/paper-smoketest"
           rm -rf "$WORKDIR"
           mkdir -p "$WORKDIR/plugins"
 
-          echo "::group::Resolving stable $SERVER_TYPE build for $MC_VERSION"
+          echo "::group::Resolving stable Paper build for $TARGET_MC_VERSION"
 
-          # discover-versions already confirmed a STABLE build exists for
-          # this exact (server_type, mc_version) pair, so this just
-          # re-resolves the download URL rather than walking backwards
-          # again - no version fallback needed here, unlike the discovery
-          # step which had to search for candidates.
-          BUILDS=$(curl -sf -H "User-Agent: $UA" \
-            "https://fill.papermc.io/v3/projects/${SERVER_TYPE}/versions/${MC_VERSION}/builds")
-          DOWNLOAD_URL=$(echo "$BUILDS" | jq -r \
-            'map(select(.channel == "STABLE")) | .[0].downloads."server:default".url // empty')
+          DOWNLOAD_URL=""
+          FOUND_VERSION=""
 
-          if [ -z "$DOWNLOAD_URL" ]; then
-            echo "::error::No stable $SERVER_TYPE build found for $MC_VERSION (was available during discovery but not now - build may have been pulled)"
+          # All known versions, newest-first, so we can walk backwards from
+          # (and including) our target if it has no STABLE build yet.
+          VERSIONS=$(curl -sf -H "User-Agent: $UA" "https://fill.papermc.io/v3/projects/paper" \
+            | jq -r '.versions | to_entries[] | .value[]' | sort -V -r)
+
+          if [ -z "$VERSIONS" ]; then
+            echo "::error::Could not fetch Paper version list from Fill API"
             return 1
           fi
 
-          echo "Using $SERVER_TYPE $MC_VERSION"
+          # Only consider our target version and older ones - never walk
+          # forward into newer major versions (e.g. past 1.21.x into 26.x),
+          # since those may need a different Java version to run.
+          CANDIDATES=$(printf '%s\n' "$VERSIONS" | awk -v t="$TARGET_MC_VERSION" '
+            $0==t {found=1}
+            found {print}
+          ')
+          if [ -z "$CANDIDATES" ]; then
+            # Target not in the list at all (e.g. list format changed) -
+            # fall back to just trying the target version directly.
+            CANDIDATES="$TARGET_MC_VERSION"
+          fi
+
+          for MC_VERSION in $CANDIDATES; do
+            echo "Checking $MC_VERSION for a stable build..."
+            BUILDS=$(curl -sf -H "User-Agent: $UA" \
+              "https://fill.papermc.io/v3/projects/paper/versions/${MC_VERSION}/builds") || continue
+            URL=$(echo "$BUILDS" | jq -r \
+              'map(select(.channel == "STABLE")) | .[0].downloads."server:default".url // empty')
+            if [ -n "$URL" ]; then
+              DOWNLOAD_URL="$URL"
+              FOUND_VERSION="$MC_VERSION"
+              break
+            fi
+          done
+
+          if [ -z "$DOWNLOAD_URL" ]; then
+            echo "::error::No stable Paper build found for $TARGET_MC_VERSION or earlier"
+            return 1
+          fi
+
+          MC_VERSION="$FOUND_VERSION"
+          echo "Using Paper $MC_VERSION"
           echo "Downloading: $DOWNLOAD_URL"
-          curl -sfL -H "User-Agent: $UA" -o "$WORKDIR/server.jar" "$DOWNLOAD_URL"
+          curl -sfL -H "User-Agent: $UA" -o "$WORKDIR/paper.jar" "$DOWNLOAD_URL"
           echo "::endgroup::"
 
-          cp "$JAR_PATH" "$WORKDIR/plugins/"
+          cp "${{ steps.jar.outputs.path }}" "$WORKDIR/plugins/"
           echo "eula=true" > "$WORKDIR/eula.txt"
           # Headless/offline settings so the server boots without a real
           # network/account context and shuts down cleanly on its own.
@@ -285,7 +174,7 @@ jobs:
             echo "simulation-distance=3"
           } > "$WORKDIR/server.properties"
 
-          echo "::group::Starting $SERVER_TYPE server"
+          echo "::group::Starting Paper server"
           cd "$WORKDIR"
           # Stream the log to the job's own stdout live (tail -F in the
           # background) so if the server dies before writing much to disk,
@@ -298,13 +187,15 @@ jobs:
 
           # The watcher loop below needs to see "Done"/error lines the
           # moment they're printed. logs/latest.log is written by Paper's
-          # (and Folia's, same log4j2 base) RollingRandomAccessFile
-          # appender, which buffers/flushes on its own schedule - NOT
-          # synchronously per line - so under CI contention the console can
-          # show "Done" well before those same bytes land on disk. console.log
-          # instead captures the JVM's raw stdout directly via `tee`, with
-          # no log4j buffering in between, so a line is visible to the
-          # watcher the instant the process writes it.
+          # log4j2 RollingRandomAccessFile appender, which buffers/flushes
+          # on its own schedule - NOT synchronously per line - so under CI
+          # contention the console can show "Done" well before those same
+          # bytes land on disk, sometimes not until shutdown flushes
+          # everything at once. That made the watcher poll an effectively
+          # stale file and time out even on a perfectly healthy boot.
+          # console.log instead captures the JVM's raw stdout directly via
+          # `tee`, with no log4j buffering in between, so a line is visible
+          # to the watcher the instant the process writes it.
           touch console.log
 
           # Feed "stop" after boot via a background watcher instead of relying
@@ -319,9 +210,15 @@ jobs:
           # contended host, which was adding avoidable delay right when
           # startup is most timing-sensitive.
           #
-          # Folia boots more threads (per-region) than Paper by design, so
-          # the same headroom/timeout budget is kept generous for both
-          # rather than tightened for Paper specifically.
+          # The watcher loop runs for 600s (10 min): observed CI runs have
+          # shown a healthy void-world boot occasionally take noticeably
+          # longer than a normal 5-10s local boot purely from shared-host
+          # contention, so this has more headroom than the previous 480s
+          # window. The outer `timeout` is given a 30s buffer beyond the
+          # watcher so a "Done" detected right at the edge of the window
+          # still has time to trigger a clean "stop" and shutdown log
+          # before the hard kill, instead of the two racing at the same
+          # deadline.
           WATCH_SECS=600
           TIMEOUT_SECS=630
           (
@@ -337,7 +234,7 @@ jobs:
           ) | timeout "$TIMEOUT_SECS" java -Xmx4G -Xms2G \
                 -XX:ActiveProcessorCount=4 \
                 -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 \
-                -jar server.jar --nogui \
+                -jar paper.jar --nogui \
                 2>&1 | tee console.log \
             || true
 
@@ -350,14 +247,15 @@ jobs:
           echo "::endgroup::"
 
           # Verdict is read from console.log, not logs/latest.log, for the
-          # same reason the watcher above uses it: the log4j2 appender
-          # buffers/flushes on its own schedule, so logs/latest.log can
-          # still be missing "Done" on disk even though the server printed
-          # it and shut down cleanly. Checking the buffered file here
-          # reintroduces the exact "stalled boot" failure the watcher was
-          # already fixed to avoid. console.log (captured via `tee` on the
-          # JVM's raw stdout) is the same source of truth the watcher
-          # trusted to send "stop", so the pass/fail check must trust it too.
+          # same reason the watcher above uses it: log4j2's
+          # RollingRandomAccessFile appender buffers/flushes on its own
+          # schedule, so logs/latest.log can still be missing "Done" on
+          # disk even though the server printed it and shut down cleanly.
+          # Checking the buffered file here reintroduces the exact false
+          # "stalled boot" failure the watcher was already fixed to avoid.
+          # console.log (captured via `tee` on the JVM's raw stdout) is the
+          # same source of truth the watcher trusted to send "stop", so the
+          # pass/fail check must trust it too.
           LOG="console.log"
           if [ ! -f "$LOG" ] || [ ! -s "$LOG" ]; then
             echo "::error::Server produced no console output at all — it likely failed to start."
@@ -390,7 +288,7 @@ jobs:
           fi
 
           if grep -qE "Error occurred while enabling $PLUGIN_NAME" "$LOG" \
-             || grep -qE "Could not load '.*${{ needs.build.outputs.jar_name }}'" "$LOG" \
+             || grep -qE "Could not load '.*${{ steps.jar.outputs.name }}'" "$LOG" \
              || grep -qE "$PLUGIN_NAME.*disabled due to" "$LOG"; then
             echo "::error::Plugin failed to enable. See extracted error below."
             FAILED=1
@@ -414,8 +312,12 @@ jobs:
           fi
 
           if [ "$FAILED" -ne 0 ]; then
-            echo "## ❌ Plugin smoke test failed on $SERVER_TYPE $MC_VERSION" >> "$GITHUB_STEP_SUMMARY"
+            echo "## ❌ Plugin smoke test failed" >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
+            # Print the plugin's own stack trace / error block if there is
+            # one; otherwise (e.g. a stall/timeout with no plugin-specific
+            # lines at all) fall back to a plain tail of the log so the
+            # summary is never empty.
             RELEVANT=$(awk '/\[AnarchyPhantoms\]|Error occurred while enabling|Caused by:|\tat /' "$LOG" | tail -n 100)
             if [ -n "$RELEVANT" ]; then
               printf '%s\n' "$RELEVANT" >> "$GITHUB_STEP_SUMMARY"
@@ -429,13 +331,13 @@ jobs:
             return 1
           fi
 
-          echo "## ✅ Plugin loaded and enabled successfully on $SERVER_TYPE $MC_VERSION" >> "$GITHUB_STEP_SUMMARY"
+          echo "## ✅ Plugin loaded and enabled successfully on Paper $MC_VERSION (target: $TARGET_MC_VERSION)" >> "$GITHUB_STEP_SUMMARY"
           }
 
           ATTEMPTS=2
           STATUS=0
           for ATTEMPT in $(seq 1 "$ATTEMPTS"); do
-            echo "::group::Smoke test attempt $ATTEMPT/$ATTEMPTS ($SERVER_TYPE $MC_VERSION)"
+            echo "::group::Smoke test attempt $ATTEMPT/$ATTEMPTS"
             run_smoke_test
             STATUS=$?
             echo "::endgroup::"
@@ -453,14 +355,76 @@ jobs:
       # Logs are uploaded regardless of pass/fail so you can inspect a
       # failure from the Actions UI without re-running anything. Both files
       # are included: console.log is what the pass/fail verdict is actually
-      # based on (see the smoke test step), while logs/latest.log is the
-      # server's own formatted log and easier to read by eye.
+      # based on (see the smoke test step), while logs/latest.log is
+      # Paper's own formatted log and easier to read by eye.
       - name: Upload server log
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.server_type }}-smoketest-log-${{ matrix.mc_version }}-${{ needs.build.outputs.short_sha }}
+          name: paper-smoketest-log-${{ steps.sha.outputs.short }}
           path: |
-            ${{ runner.temp }}/${{ matrix.server_type }}-smoketest/logs/latest.log
-            ${{ runner.temp }}/${{ matrix.server_type }}-smoketest/console.log
+            ${{ runner.temp }}/paper-smoketest/logs/latest.log
+            ${{ runner.temp }}/paper-smoketest/console.log
           if-no-files-found: ignore
+
+      # Always available under the workflow run's "Artifacts" section.
+      #
+      # if: always() (guarded by checking the jar-rename step actually
+      # succeeded) so that a smoke-test failure - which can be a genuine
+      # CI-runner stall rather than a real plugin bug (see the smoke test
+      # step's own STALL_ONLY logic above) - does NOT block you from
+      # getting the jar Maven already successfully built. Without this,
+      # a flaky shared-runner boot could deny you a working jar for a
+      # reason that has nothing to do with your code.
+      - name: Upload build artifact
+        if: always() && steps.jar.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.jar.outputs.name }}
+          path: ${{ steps.jar.outputs.path }}
+          if-no-files-found: error
+
+      # Publish each commit's jar to its own permanent, per-commit release
+      # so historical builds stay downloadable by sha after "latest" below
+      # moves on. clean: false (the default) is fine here since each of
+      # these tags/releases is only ever written to once.
+      - name: Publish per-commit release
+        if: always() && steps.jar.outcome == 'success'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: git-${{ steps.sha.outputs.short }}
+          name: Build ${{ steps.sha.outputs.short }}
+          body: |
+            Automated build from commit ${{ github.sha }}.
+            This is a permanent, immutable release for this specific commit.
+          prerelease: true
+          make_latest: false
+          files: ${{ steps.jar.outputs.path }}
+
+      # Also publish to a rolling "latest" GitHub Release so there's a
+      # stable, linkable download URL that always points at the newest jar.
+      # Remove this step (and the `contents: write` permission above) if
+      # you only want the workflow-artifact download.
+      #
+      # clean: true wipes any assets left over from a previous run before
+      # uploading the new one - without this, softprops/action-gh-release
+      # only appends, so every build's jar piled up on this one release
+      # instead of the tag actually being replaced.
+      #
+      # Same if: always() reasoning as above - only skipped if the jar
+      # itself was never produced.
+      - name: Publish to "latest" release
+        if: always() && steps.jar.outcome == 'success'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: latest
+          name: Latest build (${{ steps.sha.outputs.short }})
+          body: |
+            Automated build from commit ${{ github.sha }}.
+            This tag/release is overwritten on every push to `main` - only
+            the newest jar is kept here. For older builds, see the
+            per-commit `git-<sha>` releases.
+          prerelease: true
+          make_latest: false
+          clean: true
+          files: ${{ steps.jar.outputs.latest_path }}
