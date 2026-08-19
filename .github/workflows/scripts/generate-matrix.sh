@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Queries PaperMC's Fill API for every Paper AND Folia Minecraft version that
 # has at least one STABLE build, filters both lists down to versions >=
-# MIN_VERSION, and emits a JSON matrix pairing (server_type, version) for
-# GitHub Actions' `strategy.matrix.include`.
+# MIN_VERSION, and emits a JSON matrix pairing (server_type, mc_version,
+# channel) for GitHub Actions' `strategy.matrix.include`.
 #
 # Why 1.21.9 as a floor (not just "whatever Folia happens to support"):
 # Folia lags Paper and only has builds for 1.21, 1.20, 1.19 today (per
@@ -12,25 +12,32 @@
 # "every version Folia happens to publish."
 #
 # PINNED_PAPER_VERSIONS (one-off carve-out, Paper only):
-# 1.21.9 is the production version this plugin is actually deployed on, and
-# PaperMC now shows it as "unsupported" on their site (superseded by
-# 1.21.10/1.21.11+) even though Fill still serves STABLE builds for it today.
-# The dynamic discovery below already includes it AS LONG AS Fill keeps
-# reporting a STABLE build for it - but "unsupported" versions are exactly
-# the ones at risk of eventually losing that STABLE tag entirely. Pinned
-# versions bypass dynamic discovery (and the MIN_VERSION floor - a pin is an
-# explicit override) and are always added to the Paper leg, so this plugin
-# keeps building/smoke-testing against 1.21.9 specifically even if Fill ever
-# stops calling it STABLE. If that ever happens, this step's Fill query for
-# 1.21.9 will fail/return no STABLE build and the pin is what's holding the
-# leg in the matrix - the smoke-test job itself will then surface that
-# loudly (see smoke-test.sh) rather than this script silently dropping the
-# version. Remove a version from here once it's no longer relevant to drop
-# it back to "only tested if Fill still calls it STABLE".
-PINNED_PAPER_VERSIONS="1.21.9"
+# 1.21.9 is the production version this plugin is actually deployed on.
+# Verified directly against Fill (fill-ui.papermc.io/projects/paper/version/
+# 1.21.9): 1.21.9 is marked UNSUPPORTED (since 07/10/2025) and EVERY build
+# it ever had is on the ALPHA channel - it never received a STABLE build at
+# all, apparently having been superseded by 1.21.10 within the same update
+# cycle. That means dynamic discovery below (which only ever looks for
+# STABLE) will NEVER find 1.21.9 on its own, pin or no pin.
+#
+# So this pin does two things a plain version-string pin couldn't:
+#   1. Adds 1.21.9 to the Paper leg unconditionally, bypassing MIN_VERSION
+#      and the STABLE-only discovery loop.
+#   2. Carries an explicit allowed-channel override ("ALPHA") so the
+#      smoke-test step knows to accept an ALPHA build for this one leg
+#      instead of failing when it finds no STABLE build - which it
+#      genuinely never will for this version.
+# Every other, non-pinned matrix entry is untouched and still requires
+# STABLE, exactly as before.
+#
+# Format: space-separated "mc_version:channel" pairs. Remove an entry once
+# it's no longer relevant, to drop back to "only tested if Fill calls it
+# STABLE".
+PINNED_PAPER_VERSIONS="1.21.9:ALPHA"
 #
 # Usage: MIN_VERSION=1.21.9 ./generate-matrix.sh
-# Output (stdout): {"include":[{"server_type":"paper","mc_version":"1.21.9"}, ...]}
+# Output (stdout):
+#   {"include":[{"server_type":"paper","mc_version":"1.21.9","channel":"ALPHA"}, ...]}
 set -euo pipefail
 
 MIN_VERSION="${MIN_VERSION:-1.21.9}"
@@ -46,7 +53,8 @@ version_ge() {
 }
 
 # Fetches every version with a STABLE build for a given Fill project
-# ("paper" or "folia"), filtered to >= MIN_VERSION.
+# ("paper" or "folia"), filtered to >= MIN_VERSION. Emits "mc_version:STABLE"
+# lines so output shape matches the pinned-version format below.
 #
 # Two-step Fill query per version group, mirroring the existing build.yml
 # logic: (1) list all known versions, (2) for each, check whether it has a
@@ -77,43 +85,59 @@ stable_versions_for_project() {
       "${FILL_BASE}/${project}/versions/${mc_version}/builds" \
       | jq -r 'map(select(.channel == "STABLE")) | length > 0') || has_stable="false"
     if [ "$has_stable" = "true" ]; then
-      echo "$mc_version"
+      echo "${mc_version}:STABLE"
     fi
   done
 }
 
 echo "::group::Discovering stable Paper versions >= $MIN_VERSION" >&2
-PAPER_VERSIONS=$(stable_versions_for_project "paper")
-echo "$PAPER_VERSIONS" >&2
+PAPER_ENTRIES=$(stable_versions_for_project "paper")
+echo "${PAPER_ENTRIES:-<none>}" >&2
 echo "::endgroup::" >&2
 
 # Merge in the pinned versions (see PINNED_PAPER_VERSIONS above) regardless
-# of what dynamic discovery found or whether they clear MIN_VERSION, then
-# dedupe. This is additive-only: it can widen the Paper matrix beyond
+# of what dynamic discovery found or whether they clear MIN_VERSION.
+# Dedupe by mc_version, preferring a dynamically-discovered STABLE entry
+# over a pinned non-STABLE one if the same version somehow appears in both
+# (e.g. a currently-ALPHA-only pinned version that later gets a real STABLE
+# build - the moment that happens, prefer the STABLE truth over the stale
+# pin). This is additive-only: it can widen the Paper matrix beyond
 # discovery, never narrow it.
 if [ -n "$PINNED_PAPER_VERSIONS" ]; then
   echo "::group::Merging pinned Paper versions: $PINNED_PAPER_VERSIONS" >&2
-  PAPER_VERSIONS=$(printf '%s\n%s\n' "$PAPER_VERSIONS" "$PINNED_PAPER_VERSIONS" \
-    | tr ' ' '\n' | sed '/^$/d' | sort -V -u -r)
-  echo "$PAPER_VERSIONS" >&2
+  PAPER_ENTRIES=$(printf '%s\n%s\n' "$PAPER_ENTRIES" "$PINNED_PAPER_VERSIONS" \
+    | tr ' ' '\n' | sed '/^$/d' \
+    | awk -F: '{
+        v=$1; c=$2;
+        # First entry seen per version wins UNLESS a later one is STABLE
+        # and the stored one is not - then the STABLE entry replaces it.
+        if (!(v in seen) || (c == "STABLE" && chan[v] != "STABLE")) {
+          seen[v]=1; chan[v]=c
+        }
+      } END { for (v in chan) print v ":" chan[v] }' \
+    | sort -t: -k1,1 -V -r)
+  echo "$PAPER_ENTRIES" >&2
   echo "::endgroup::" >&2
 fi
 
 echo "::group::Discovering stable Folia versions >= $MIN_VERSION" >&2
-FOLIA_VERSIONS=$(stable_versions_for_project "folia" || true)
-echo "${FOLIA_VERSIONS:-<none>}" >&2
+FOLIA_ENTRIES=$(stable_versions_for_project "folia" || true)
+echo "${FOLIA_ENTRIES:-<none>}" >&2
 echo "::endgroup::" >&2
 
-if [ -z "$PAPER_VERSIONS" ]; then
+if [ -z "$PAPER_ENTRIES" ]; then
   echo "::error::No stable Paper versions found >= $MIN_VERSION — refusing to emit an empty matrix" >&2
   exit 1
 fi
 
 # Build the JSON matrix with jq rather than string-concatenation, so
-# quoting/escaping is never a hand-rolled risk.
+# quoting/escaping is never a hand-rolled risk. Each "mc_version:channel"
+# entry becomes {"server_type":..., "mc_version":..., "channel":...}.
 {
-  printf '%s\n' "$PAPER_VERSIONS" | jq -R -c '{server_type: "paper", mc_version: .}'
-  if [ -n "$FOLIA_VERSIONS" ]; then
-    printf '%s\n' "$FOLIA_VERSIONS" | jq -R -c '{server_type: "folia", mc_version: .}'
+  printf '%s\n' "$PAPER_ENTRIES" \
+    | jq -R -c 'split(":") | {server_type: "paper", mc_version: .[0], channel: .[1]}'
+  if [ -n "$FOLIA_ENTRIES" ]; then
+    printf '%s\n' "$FOLIA_ENTRIES" \
+      | jq -R -c 'split(":") | {server_type: "folia", mc_version: .[0], channel: .[1]}'
   fi
 } | jq -s -c '{include: .}'

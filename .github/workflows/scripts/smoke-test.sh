@@ -11,12 +11,20 @@
 #
 # Required env: SERVER_TYPE, TARGET_MC_VERSION, JAR_PATH
 # Optional env: UA (User-Agent for Fill API requests)
+#               TARGET_CHANNEL (build channel to accept, default STABLE)
+#
+# TARGET_CHANNEL exists for pinned matrix entries (see generate-matrix.sh's
+# PINNED_PAPER_VERSIONS) that were added to the matrix without ever having a
+# STABLE build - e.g. Paper 1.21.9, which per Fill only ever received ALPHA
+# builds before being superseded by 1.21.10. Every dynamically-discovered
+# matrix entry still passes/defaults to STABLE, unchanged from before.
 set -uo pipefail
 
 : "${SERVER_TYPE:?must be paper or folia}"
 : "${TARGET_MC_VERSION:?must be set}"
 : "${JAR_PATH:?path to the built plugin jar}"
 UA="${UA:-anarchy-phantoms-ci/1.0}"
+TARGET_CHANNEL="${TARGET_CHANNEL:-STABLE}"
 
 case "$SERVER_TYPE" in
   paper|folia) ;;
@@ -33,26 +41,27 @@ run_smoke_test() {
   rm -rf "$WORKDIR"
   mkdir -p "$WORKDIR/plugins"
 
-  echo "::group::Resolving stable $SERVER_TYPE build for $TARGET_MC_VERSION"
+  echo "::group::Resolving $TARGET_CHANNEL $SERVER_TYPE build for $TARGET_MC_VERSION"
 
   # Exact version match only - unlike the old single-target build.yml step,
   # this script does NOT walk backwards to older versions on a missing
-  # stable build. Version selection (including "does this version even
-  # have a stable build") already happened once in generate-matrix.sh; if
-  # a version made it into the matrix, it's expected to still have a
-  # stable build minutes later. If Fill's data changed underneath us in
-  # that window, failing loudly here is more honest than silently testing
-  # a different version than the matrix says.
+  # build on the target channel. Version selection (including "does this
+  # version even have a build on the expected channel") already happened
+  # once in generate-matrix.sh; if a version made it into the matrix, it's
+  # expected to still have a matching build minutes later. If Fill's data
+  # changed underneath us in that window, failing loudly here is more
+  # honest than silently testing a different version than the matrix says.
   BUILDS=$(curl -sf -H "User-Agent: $UA" \
     "https://fill.papermc.io/v3/projects/${SERVER_TYPE}/versions/${TARGET_MC_VERSION}/builds") || {
     echo "::error::Could not fetch builds for $SERVER_TYPE $TARGET_MC_VERSION from Fill API"
     return 1
   }
   DOWNLOAD_URL=$(echo "$BUILDS" | jq -r \
-    'map(select(.channel == "STABLE")) | .[0].downloads."server:default".url // empty')
+    --arg channel "$TARGET_CHANNEL" \
+    'map(select(.channel == $channel)) | .[0].downloads."server:default".url // empty')
 
   if [ -z "$DOWNLOAD_URL" ]; then
-    echo "::error::No stable $SERVER_TYPE build found for $TARGET_MC_VERSION"
+    echo "::error::No $TARGET_CHANNEL $SERVER_TYPE build found for $TARGET_MC_VERSION"
     return 1
   fi
 

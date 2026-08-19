@@ -7,8 +7,11 @@ name: Build
 #
 # Paper 1.21.9 is additionally pinned (always included in the Paper leg,
 # independent of Fill discovery) since it's this plugin's actual production
-# target and PaperMC now marks it "unsupported" on their site in favor of
-# newer minors. See PINNED_PAPER_VERSIONS in generate-matrix.sh.
+# target. Unlike every other version in the matrix, 1.21.9 never had a
+# STABLE build at all (PaperMC's Fill data shows it as ALPHA-only, marked
+# unsupported since 07/10/2025, superseded by 1.21.10 same cycle) - so its
+# leg is smoke-tested against the best available ALPHA build instead. See
+# PINNED_PAPER_VERSIONS in generate-matrix.sh for details.
 on:
   push:
     branches: [main]
@@ -84,11 +87,13 @@ jobs:
   # ---------------------------------------------------------------------
   # 2. Discover the version matrix at runtime. Queries Fill for both Paper
   #    AND Folia, keeps only versions >= MIN_MC_VERSION that currently
-  #    have a STABLE build, and emits {"include":[{server_type,mc_version}, ...]}
-  #    for the smoke-test job below to consume. This is intentionally its
-  #    own job (not a step inside `build`) so a Fill API hiccup shows up
-  #    as its own clearly-named red X instead of being buried inside the
-  #    compile job's logs.
+  #    have a STABLE build (plus the pinned 1.21.9 leg, which is ALPHA-only
+  #    - see generate-matrix.sh), and emits
+  #    {"include":[{server_type,mc_version,channel}, ...]} for the
+  #    smoke-test job below to consume. This is intentionally its own job
+  #    (not a step inside `build`) so a Fill API hiccup shows up as its own
+  #    clearly-named red X instead of being buried inside the compile
+  #    job's logs.
   # ---------------------------------------------------------------------
   generate-matrix:
     runs-on: ubuntu-latest
@@ -111,10 +116,12 @@ jobs:
           echo "matrix=$MATRIX_JSON" >> "$GITHUB_OUTPUT"
 
   # ---------------------------------------------------------------------
-  # 3. Fan out: one job per (server_type, mc_version) pair from the
-  #    discovered matrix. Each leg downloads the SAME jar built once in
+  # 3. Fan out: one job per (server_type, mc_version, channel) triple from
+  #    the discovered matrix. Each leg downloads the SAME jar built once in
   #    `build` above (never rebuilds it) and boots it against that leg's
-  #    server type/version.
+  #    server type/version, resolving a build on that leg's specific
+  #    channel (STABLE for everything discovered dynamically; ALPHA for
+  #    the pinned 1.21.9 leg - see generate-matrix.sh).
   # ---------------------------------------------------------------------
   smoke-test:
     needs: [build, generate-matrix]
@@ -132,11 +139,12 @@ jobs:
           name: jar-${{ needs.build.outputs.short_sha }}
           path: dist
 
-      - name: Smoke test on ${{ matrix.server_type }} ${{ matrix.mc_version }}
+      - name: Smoke test on ${{ matrix.server_type }} ${{ matrix.mc_version }} (${{ matrix.channel }})
         id: smoke
         env:
           SERVER_TYPE: ${{ matrix.server_type }}
           TARGET_MC_VERSION: ${{ matrix.mc_version }}
+          TARGET_CHANNEL: ${{ matrix.channel }}
           JAR_PATH: dist/${{ needs.build.outputs.jar_name }}
         run: bash .github/workflows/scripts/smoke-test.sh
 
@@ -183,7 +191,9 @@ jobs:
           body: |
             Automated build from commit ${{ github.sha }}.
             This is a permanent, immutable release for this specific commit.
-            Smoke-tested against Paper and Folia, all supported versions >= ${{ env.MIN_MC_VERSION }}.
+            Smoke-tested against Paper and Folia, all supported versions >= ${{ env.MIN_MC_VERSION }}
+            (Paper 1.21.9 included via its pinned ALPHA build - Paper never shipped a STABLE
+            build for that version).
           prerelease: true
           make_latest: false
           files: dist/${{ needs.build.outputs.jar_name }}
