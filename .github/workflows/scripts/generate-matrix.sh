@@ -11,6 +11,24 @@
 # matrix only ever contains versions this plugin is meant to support, not
 # "every version Folia happens to publish."
 #
+# PINNED_PAPER_VERSIONS (one-off carve-out, Paper only):
+# 1.21.9 is the production version this plugin is actually deployed on, and
+# PaperMC now shows it as "unsupported" on their site (superseded by
+# 1.21.10/1.21.11+) even though Fill still serves STABLE builds for it today.
+# The dynamic discovery below already includes it AS LONG AS Fill keeps
+# reporting a STABLE build for it - but "unsupported" versions are exactly
+# the ones at risk of eventually losing that STABLE tag entirely. Pinned
+# versions bypass dynamic discovery (and the MIN_VERSION floor - a pin is an
+# explicit override) and are always added to the Paper leg, so this plugin
+# keeps building/smoke-testing against 1.21.9 specifically even if Fill ever
+# stops calling it STABLE. If that ever happens, this step's Fill query for
+# 1.21.9 will fail/return no STABLE build and the pin is what's holding the
+# leg in the matrix - the smoke-test job itself will then surface that
+# loudly (see smoke-test.sh) rather than this script silently dropping the
+# version. Remove a version from here once it's no longer relevant to drop
+# it back to "only tested if Fill still calls it STABLE".
+PINNED_PAPER_VERSIONS="1.21.9"
+#
 # Usage: MIN_VERSION=1.21.9 ./generate-matrix.sh
 # Output (stdout): {"include":[{"server_type":"paper","mc_version":"1.21.9"}, ...]}
 set -euo pipefail
@@ -68,6 +86,18 @@ echo "::group::Discovering stable Paper versions >= $MIN_VERSION" >&2
 PAPER_VERSIONS=$(stable_versions_for_project "paper")
 echo "$PAPER_VERSIONS" >&2
 echo "::endgroup::" >&2
+
+# Merge in the pinned versions (see PINNED_PAPER_VERSIONS above) regardless
+# of what dynamic discovery found or whether they clear MIN_VERSION, then
+# dedupe. This is additive-only: it can widen the Paper matrix beyond
+# discovery, never narrow it.
+if [ -n "$PINNED_PAPER_VERSIONS" ]; then
+  echo "::group::Merging pinned Paper versions: $PINNED_PAPER_VERSIONS" >&2
+  PAPER_VERSIONS=$(printf '%s\n%s\n' "$PAPER_VERSIONS" "$PINNED_PAPER_VERSIONS" \
+    | tr ' ' '\n' | sed '/^$/d' | sort -V -u -r)
+  echo "$PAPER_VERSIONS" >&2
+  echo "::endgroup::" >&2
+fi
 
 echo "::group::Discovering stable Folia versions >= $MIN_VERSION" >&2
 FOLIA_VERSIONS=$(stable_versions_for_project "folia" || true)

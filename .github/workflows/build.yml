@@ -4,6 +4,11 @@ name: Build
 # Paper AND Folia version (>= MIN_MC_VERSION) that currently has a STABLE
 # build, discovered at runtime from PaperMC's Fill API. Publishing only
 # happens if every leg of the smoke-test matrix passes.
+#
+# Paper 1.21.9 is additionally pinned (always included in the Paper leg,
+# independent of Fill discovery) since it's this plugin's actual production
+# target and PaperMC now marks it "unsupported" on their site in favor of
+# newer minors. See PINNED_PAPER_VERSIONS in generate-matrix.sh.
 on:
   push:
     branches: [main]
