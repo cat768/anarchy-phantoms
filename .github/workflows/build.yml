@@ -100,7 +100,7 @@ jobs:
           UA: anarchy-phantoms-ci/1.0 (https://github.com/${{ github.repository }})
         run: |
           set -euo pipefail
-          MATRIX_JSON="$(.github/workflows/scripts/generate-matrix.sh)"
+          MATRIX_JSON="$(bash .github/workflows/scripts/generate-matrix.sh)"
           echo "Generated matrix:"
           echo "$MATRIX_JSON" | jq .
           echo "matrix=$MATRIX_JSON" >> "$GITHUB_OUTPUT"
@@ -133,7 +133,7 @@ jobs:
           SERVER_TYPE: ${{ matrix.server_type }}
           TARGET_MC_VERSION: ${{ matrix.mc_version }}
           JAR_PATH: dist/${{ needs.build.outputs.jar_name }}
-        run: .github/workflows/scripts/smoke-test.sh
+        run: bash .github/workflows/scripts/smoke-test.sh
 
       - name: Upload server log
         if: always()
