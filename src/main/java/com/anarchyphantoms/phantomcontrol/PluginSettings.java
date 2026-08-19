@@ -46,7 +46,21 @@ public final class PluginSettings {
 
         this.blockOverworldSpawns = config.getBoolean("phantoms.block-overworld-spawns", true);
         this.onlySpawnInEnd = config.getBoolean("phantoms.only-spawn-in-end", true);
-        this.surfaceCheckDepth = Math.max(1, config.getInt("phantoms.surface-check-depth", 5));
+        // Clamped to at least PhantomEndSpawner.MAX_HEIGHT_ABOVE_GROUND: if
+        // this were shallower than the height End spawns are actually
+        // placed at, PhantomSpawnListener's downward veto scan would never
+        // reach the real surface and would cancel every End-spawned
+        // phantom regardless of end-spawning config (see MAX_HEIGHT_ABOVE_GROUND
+        // javadoc). A misconfigured/stale config.yml can no longer
+        // reintroduce that bug.
+        int configuredDepth = config.getInt("phantoms.surface-check-depth", PhantomEndSpawner.MAX_HEIGHT_ABOVE_GROUND + 5);
+        this.surfaceCheckDepth = Math.max(PhantomEndSpawner.MAX_HEIGHT_ABOVE_GROUND, configuredDepth);
+        if (configuredDepth < PhantomEndSpawner.MAX_HEIGHT_ABOVE_GROUND) {
+            logger.warning("[AnarchyPhantoms] phantoms.surface-check-depth (" + configuredDepth
+                    + ") is lower than end-spawning's max height-above-ground ("
+                    + PhantomEndSpawner.MAX_HEIGHT_ABOVE_GROUND + "); clamping to "
+                    + surfaceCheckDepth + " so End-spawned phantoms aren't silently vetoed.");
+        }
         this.passiveUntilAttacked = config.getBoolean("phantoms.passive-until-attacked", true);
         this.silenceScreechUntilAttacked = config.getBoolean("phantoms.silence-screech-until-attacked", true);
         this.provokedDurationTicks = config.getLong("phantoms.provoked-duration-ticks", 6000);

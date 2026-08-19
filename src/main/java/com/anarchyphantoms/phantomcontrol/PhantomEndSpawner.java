@@ -44,6 +44,16 @@ public final class PhantomEndSpawner implements Listener {
 
     private static final long CHECK_INTERVAL_TICKS = 200L; // every 10 seconds
 
+    /**
+     * Highest a spawned phantom is ever placed above the real ground
+     * (see pickSpawnLocation). PluginSettings clamps surface-check-depth
+     * to at least this value so PhantomSpawnListener's downward veto scan
+     * can never be shallower than the height phantoms actually spawn at -
+     * that mismatch previously caused every End spawn to be silently
+     * vetoed regardless of end-spawning settings.
+     */
+    static final int MAX_HEIGHT_ABOVE_GROUND = 30;
+
     private final AnarchyPhantomsPlugin plugin;
     private final Random random = new Random();
 
@@ -184,7 +194,6 @@ public final class PhantomEndSpawner implements Listener {
         ThreadLocalRandom rnd = ThreadLocalRandom.current();
         int horizontalSpread = 20;
         int minHeightAbove = 20;
-        int maxHeightAbove = 30;
 
         int dx = rnd.nextInt(-horizontalSpread, horizontalSpread + 1);
         int dz = rnd.nextInt(-horizontalSpread, horizontalSpread + 1);
@@ -196,7 +205,7 @@ public final class PhantomEndSpawner implements Listener {
             return null;
         }
 
-        int dy = rnd.nextInt(minHeightAbove, maxHeightAbove + 1);
+        int dy = rnd.nextInt(minHeightAbove, MAX_HEIGHT_ABOVE_GROUND + 1);
         int spawnY = Math.min(groundY + dy, world.getMaxHeight() - 1);
 
         return new Location(world, x + 0.5, spawnY, z + 0.5);
