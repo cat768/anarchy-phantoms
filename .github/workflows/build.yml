@@ -133,6 +133,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      # Paper/Folia 26.x require Java 25+ to boot at all; the runner's
+      # default JDK is older (class file version 61 = Java 17) and can't
+      # even load jars compiled with newer JDKs (class file version 65 =
+      # Java 21), which is what 1.21.x server jars are built with. Without
+      # this step every leg dies before the plugin gets a chance to load -
+      # a newer JDK than any target server strictly needs is harmless
+      # since the JVM runs older-targeted bytecode fine.
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+
       - name: Download jar artifact
         uses: actions/download-artifact@v6
         with:
