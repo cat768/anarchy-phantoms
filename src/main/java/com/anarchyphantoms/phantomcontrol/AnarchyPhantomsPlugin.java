@@ -60,7 +60,11 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (command.getName().equalsIgnoreCase("anarchyphantoms")) {
-            if (args.length > 0 && (args[0].equalsIgnoreCase("ver") || args[0].equalsIgnoreCase("version"))) {
+            if (args.length == 0 || args[0].equalsIgnoreCase("help")) {
+                sendHelp(sender, label);
+                return true;
+            }
+            if (args[0].equalsIgnoreCase("ver") || args[0].equalsIgnoreCase("version")) {
                 sender.sendMessage("[AnarchyPhantoms] " + buildInfo.summary());
                 return true;
             }
@@ -101,10 +105,26 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
                 }
                 return true;
             }
-            sender.sendMessage("[AnarchyPhantoms] Usage: /anarchyphantoms ver | git | reload | debug <on|off>");
+            sender.sendMessage("[AnarchyPhantoms] Unknown subcommand '" + args[0] + "'. Run /" + label + " help for a list of commands.");
             return true;
         }
         return false;
+    }
+
+    /** "/ap" or "/ap help" - lists all subcommands, with admin-only ones marked. */
+    private void sendHelp(CommandSender sender, String label) {
+        boolean isAdmin = sender.hasPermission("anarchyphantoms.admin");
+
+        sender.sendMessage("[AnarchyPhantoms] Commands:");
+        sender.sendMessage("  /" + label + " help - Shows this list.");
+        sender.sendMessage("  /" + label + " ver - Shows the running build's version/commit info.");
+        sender.sendMessage("  /" + label + " git - Shows the current build's commit, with full message.");
+        sender.sendMessage("  /" + label + " git info <hash> - Shows full detail for a specific baked-in commit.");
+        sender.sendMessage("  /" + label + " git history [page] - Lists baked-in commit history, newest first.");
+        if (isAdmin) {
+            sender.sendMessage("  /" + label + " reload - Reloads config.yml without a restart. (admin)");
+            sender.sendMessage("  /" + label + " debug <on|off> - Toggles debug logging at runtime. (admin)");
+        }
     }
 
     /**

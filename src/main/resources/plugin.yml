@@ -9,7 +9,7 @@ folia-supported: true
 commands:
   anarchyphantoms:
     description: AnarchyPhantoms admin/version commands.
-    usage: /anarchyphantoms ver | git [info <hash>|history [page]] | reload | debug <on|off>
+    usage: /anarchyphantoms help | ver | git [info <hash>|history [page]] | reload | debug <on|off>
     aliases: [ap]
 
 permissions:

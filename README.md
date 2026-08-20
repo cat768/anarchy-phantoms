@@ -111,11 +111,17 @@ debug:
 
 ## Commands & permissions
 
+All subcommands work under either `/anarchyphantoms` or its shorter alias `/ap`.
+
 | Command | Description | Permission | Default |
 |---|---|---|---|
-| `/anarchyphantoms reload` (alias `/ap reload`) | Reloads `config.yml` without a server restart. Note: a live `/ap debug` runtime override (if set) is *not* cleared by this — see below. | `anarchyphantoms.admin` | op |
-
-> **Known gap:** `PluginSettings` already supports a runtime debug override (`setDebugRuntimeOverride`, meant to be driven by `/ap debug [on|off]` and documented as such in code comments), but that subcommand isn't actually wired up in `onCommand` yet — only `debug.enabled` in `config.yml` currently controls debug logging. Worth checking `AnarchyPhantomsPlugin.java` before relying on an in-game debug toggle.
+| `/ap` or `/ap help` | Lists available subcommands (admin-only ones are only shown to admins). | — | everyone |
+| `/ap ver` (alias `version`) | Shows the running build's version/commit info. | — | everyone |
+| `/ap git` | Shows the current build's commit, with its full commit message. | — | everyone |
+| `/ap git info <hash>` | Shows full detail for a specific baked-in commit. | — | everyone |
+| `/ap git history [page]` | Lists baked-in commit history, newest first, 8 per page. | — | everyone |
+| `/ap reload` | Reloads `config.yml` without a server restart. Note: a live `/ap debug` runtime override (if set) is *not* cleared by this — see below. | `anarchyphantoms.admin` | op |
+| `/ap debug <on\|off>` | Toggles debug logging at runtime, overriding `debug.enabled` in `config.yml` until the next restart or another `/ap debug` call. Running it with no `on`/`off` argument reports the current state. | `anarchyphantoms.admin` | op |
 
 ## Compatibility
 
