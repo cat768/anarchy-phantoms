@@ -54,6 +54,43 @@
                     <encoding>UTF-8</encoding>
                 </configuration>
             </plugin>
+            <!--
+              Generates target/classes/git.properties at build time, embedding
+              the current commit hash + build timestamp into the jar. Read at
+              runtime by BuildInfo for the "/ap ver" command. Works both for
+              local `mvn package` (as long as .git is present) and CI builds.
+              If .git is missing (e.g. a source-only zip with no VCS history),
+              failOnNoGitDirectory is false so the build still succeeds -
+              BuildInfo falls back to "unknown" in that case.
+            -->
+            <plugin>
+                <groupId>io.github.git-commit-id</groupId>
+                <artifactId>git-commit-id-maven-plugin</artifactId>
+                <version>9.0.1</version>
+                <executions>
+                    <execution>
+                        <id>get-the-git-infos</id>
+                        <goals>
+                            <goal>revision</goal>
+                        </goals>
+                        <phase>initialize</phase>
+                    </execution>
+                </executions>
+                <configuration>
+                    <generateGitPropertiesFile>true</generateGitPropertiesFile>
+                    <generateGitPropertiesFilename>${project.build.outputDirectory}/git.properties</generateGitPropertiesFilename>
+                    <failOnNoGitDirectory>false</failOnNoGitDirectory>
+                    <failOnUnableToExtractRepoInfo>false</failOnUnableToExtractRepoInfo>
+                    <includeOnlyProperties>
+                        <includeOnlyProperty>^git.commit.id\.(abbrev|full)$</includeOnlyProperty>
+                        <includeOnlyProperty>^git.build.time$</includeOnlyProperty>
+                        <includeOnlyProperty>^git.branch$</includeOnlyProperty>
+                        <includeOnlyProperty>^git.dirty$</includeOnlyProperty>
+                    </includeOnlyProperties>
+                    <dateFormat>yyyy-MM-dd HH:mm:ss z</dateFormat>
+                    <dateFormatTimeZone>UTC</dateFormatTimeZone>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 </project>

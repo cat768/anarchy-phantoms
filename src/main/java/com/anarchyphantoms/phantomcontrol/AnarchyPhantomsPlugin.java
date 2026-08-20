@@ -17,6 +17,7 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
 
     private PluginSettings settings;
     private PhantomProvocationTracker provocationTracker;
+    private BuildInfo buildInfo;
 
     @Override
     public void onEnable() {
@@ -24,6 +25,7 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
 
         this.settings = new PluginSettings(this);
         this.provocationTracker = new PhantomProvocationTracker(this);
+        this.buildInfo = new BuildInfo(this);
 
         PhantomSpawnListener spawnListener = new PhantomSpawnListener(this);
         PhantomBehaviorListener behaviorListener = new PhantomBehaviorListener(this, provocationTracker);
@@ -54,6 +56,10 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (command.getName().equalsIgnoreCase("anarchyphantoms")) {
+            if (args.length > 0 && (args[0].equalsIgnoreCase("ver") || args[0].equalsIgnoreCase("version"))) {
+                sender.sendMessage("[AnarchyPhantoms] " + buildInfo.summary());
+                return true;
+            }
             if (args.length > 0 && args[0].equalsIgnoreCase("reload")) {
                 if (!sender.hasPermission("anarchyphantoms.admin")) {
                     sender.sendMessage("You do not have permission to do that.");
@@ -87,7 +93,7 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
                 }
                 return true;
             }
-            sender.sendMessage("[AnarchyPhantoms] Usage: /anarchyphantoms reload | debug <on|off>");
+            sender.sendMessage("[AnarchyPhantoms] Usage: /anarchyphantoms ver | reload | debug <on|off>");
             return true;
         }
         return false;
@@ -99,5 +105,9 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
 
     public PhantomProvocationTracker getProvocationTracker() {
         return provocationTracker;
+    }
+
+    public BuildInfo getBuildInfo() {
+        return buildInfo;
     }
 }

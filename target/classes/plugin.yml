@@ -8,9 +8,8 @@ folia-supported: true
 
 commands:
   anarchyphantoms:
-    description: Reloads the AnarchyPhantoms plugin configuration.
-    usage: /anarchyphantoms reload | debug <on|off>
-    permission: anarchyphantoms.admin
+    description: AnarchyPhantoms admin/version commands.
+    usage: /anarchyphantoms ver | reload | debug <on|off>
     aliases: [ap]
 
 permissions:
