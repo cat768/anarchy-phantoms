@@ -1,15 +1,18 @@
 # Anarchy Phantoms
 
-A lightweight Paper/Folia plugin that reworks vanilla Phantom behavior for anarchy-style servers: Phantoms only spawn in The End, only above end stone or chorus blocks, stay passive until attacked, and stay silent until provoked.
+A lightweight Paper/Folia plugin that brings Phantoms to anarchy-style End servers, 2b2t-style: phantoms are **actively spawned** above players in The End (vanilla has no natural spawn cycle there at all), only above end stone or chorus blocks, and stay passive and silent until a player attacks one.
 
 ## Behavior
 
-- **End-only spawning** — Phantoms never naturally spawn in the Overworld. Natural spawns are restricted to The End dimension.
-- **Valid surface required** — Phantoms only spawn directly above end stone, chorus plant, or chorus flower blocks (configurable, with a configurable search depth below the spawn point).
+- **Active End spawning** — Vanilla phantoms only have a natural spawn cycle in the Overworld (gated by 3 sleepless in-game days). This plugin actively spawns phantoms above online players in The End on a per-player timer, mirroring 2b2t's "Phantoms In The End" behavior. Not gated by sleep/insomnia — The End has no beds or day/night cycle, so that stat is meaningless there.
+- **Overworld spawns blocked** — Natural Overworld phantom spawns are disabled outright (configurable).
+- **Valid surface required** — Phantoms only spawn above a real, known end stone, chorus plant, or chorus flower surface (configurable materials and search depth), never over open void.
+- **Per-player spawn limits** — Spawn chance, check radius, and a max-phantoms-per-player cap are all configurable, so spawning scales instead of flooding a player.
 - **Passive until attacked** — Phantoms won't target or swoop at players on their own. A phantom only becomes hostile toward players after a player deals damage to it.
 - **Silent until provoked** — Ambient screech/flap/swoop sounds are suppressed for phantoms that haven't been attacked yet. Once provoked, sounds play normally.
 - **Per-entity, not per-server** — Provocation is tracked on the individual phantom (via its persistent data), so one aggravated phantom doesn't flip every phantom on the map.
 - **Deliberate spawns are untouched** — Spawns from spawn eggs, commands, or other plugins are left alone; only natural/environmental spawns are governed, so admins keep full control when they want it.
+- **Folia-safe** — Active spawning uses a per-player `EntityScheduler` (via `Player#getScheduler()`), not a global scheduler sweep, so it follows each player across regions correctly under Folia.
 
 All of the above is configurable — see [Configuration](#configuration).
 
@@ -25,7 +28,11 @@ All of the above is configurable — see [Configuration](#configuration).
 
 ## Installation
 
-1. Download the latest `anarchy-phantoms-<version>.jar` from [Releases](../../releases) (or build it yourself — see below).
+1. Download a jar from [Releases](../../releases) (or build it yourself — see below):
+   - **`anarchy-phantoms-latest.jar`** (tag `latest`) — always the most recent build off `main`, overwritten on every push. Good for staying current.
+   - **`anarchy-phantoms-git-<sha>.jar`** — an immutable, permanent release for one specific commit. Good for pinning a version.
+   
+   Every release is only published after it passes CI smoke tests booting a real server (see [Compatibility](#compatibility)), so anything in Releases is known to enable cleanly.
 2. Drop it into your server's `plugins/` folder.
 3. Start/restart the server. A default `config.yml` will be generated under `plugins/AnarchyPhantoms/`.
 4. Adjust `config.yml` to taste, then run `/anarchyphantoms reload` (or `/ap reload`) to apply changes without a restart.
@@ -60,7 +67,10 @@ phantoms:
     - CHORUS_FLOWER
 
   # How far below the spawn location to look for a valid surface block.
-  surface-check-depth: 5
+  # Automatically clamped at load time to be no shallower than end-spawning's
+  # max height-above-ground (30), so a stale/misconfigured value can't
+  # silently veto every actively-spawned End phantom.
+  surface-check-depth: 35
 
   # Phantoms will not target or attack players until a player damages them first.
   passive-until-attacked: true
@@ -72,29 +82,61 @@ phantoms:
   # attacked, and after which it reverts to passive/silent if left alone.
   # Set to -1 to make provocation permanent for that phantom's lifetime.
   provoked-duration-ticks: 6000
+
+  # Active End spawning. Vanilla has NO natural phantom spawn cycle in The
+  # End at all, so without this section nothing ever attempts to spawn a
+  # phantom there naturally for the rules above to even apply to.
+  end-spawning:
+    # Master switch for actively spawning phantoms in The End.
+    enabled: true
+
+    # Chance, per player, per check interval (every 10 seconds), that a
+    # spawn attempt is made. 0.15 ≈ a spawn attempt on average every ~67s
+    # per eligible player.
+    spawn-chance: 0.15
+
+    # Radius (in blocks) used both to count existing nearby phantoms and
+    # as the general "near this player" range.
+    spawn-check-radius: 32.0
+
+    # Per-player cap: stop spawning more phantoms near a player once this
+    # many are already within spawn-check-radius of them.
+    max-phantoms-per-player: 4
+
+# Console/log-only debug logging of spawn eligibility checks (never sent to
+# players in chat). Can also be flipped at runtime — see Commands below.
+debug:
+  enabled: false
 ```
 
 ## Commands & permissions
 
 | Command | Description | Permission | Default |
 |---|---|---|---|
-| `/anarchyphantoms reload` (alias `/ap reload`) | Reloads `config.yml` without a server restart | `anarchyphantoms.admin` | op |
+| `/anarchyphantoms reload` (alias `/ap reload`) | Reloads `config.yml` without a server restart. Note: a live `/ap debug` runtime override (if set) is *not* cleared by this — see below. | `anarchyphantoms.admin` | op |
+
+> **Known gap:** `PluginSettings` already supports a runtime debug override (`setDebugRuntimeOverride`, meant to be driven by `/ap debug [on|off]` and documented as such in code comments), but that subcommand isn't actually wired up in `onCommand` yet — only `debug.enabled` in `config.yml` currently controls debug logging. Worth checking `AnarchyPhantomsPlugin.java` before relying on an in-game debug toggle.
 
 ## Compatibility
 
-This plugin is currently built and CI-tested against **Paper 1.21.9**:
-
 - `pom.xml` compiles against `paper-api` version `1.21.9-R0.1-SNAPSHOT`.
-- `plugin.yml` declares `api-version: '1.21'` — Paper's `api-version` field is only ever major.minor granularity, and Paper treats this as "compatible with any 1.21.x server." That's what lets a jar built against 1.21.9 load and run unmodified on newer 1.21.x releases (1.21.10, 1.21.11, ...) as well, without needing a rebuild for every patch version.
-- The CI workflow (`.github/workflows/build.yml`) boots a real Paper 1.21.9 server with the freshly built jar on every push and fails the build if the plugin doesn't reach "Done" and enable cleanly — so `pom.xml`'s Paper API version and the workflow's `TARGET_MC_VERSION` should always be kept in sync with each other.
-- **Folia support**: `folia-supported: true` is already set in `plugin.yml`. The plugin only uses standard Bukkit event listeners and per-entity persistent data (no global schedulers, no cross-region state), so it runs correctly under Folia's regionized threading model as well as on standard Paper.
+- `plugin.yml` declares `api-version: '1.21'` — Paper's `api-version` field is only ever major.minor granularity, and Paper treats this as "compatible with any 1.21.x server." That's what lets a jar built against 1.21.9 load and run unmodified on newer 1.21.x releases as well, without needing a rebuild for every patch version.
+- **Folia support**: `folia-supported: true` is set in `plugin.yml`. The plugin uses standard Bukkit event listeners, per-entity persistent data, and per-player `EntityScheduler` tasks (no global schedulers, no cross-region state), so it runs correctly under Folia's regionized threading model as well as on standard Paper.
 - Starting in 2026, Mojang moved to year.drop versioning (e.g. `26.1`, `26.2`, ...) instead of `1.x`, and Paper follows the same scheme for Java Edition builds going forward (1.21.11 was the last `1.x`-style release; see [Paper's project setup docs](https://docs.papermc.io/paper/dev/project-setup/)). Bedrock version numbers (e.g. `26.40`) are a **separate** numbering track and don't correspond 1:1 with Java/Paper releases — don't match them up when picking a Paper API version.
+
+### CI pipeline
+
+CI is no longer a single fixed-version smoke test — `.github/workflows/build.yml` builds the jar once, then dynamically discovers every currently-STABLE Paper **and** Folia version (from PaperMC's Fill API) at or above `MIN_MC_VERSION` (currently `1.21.9`) and boots the same jar against every one of them in parallel. Paper 1.21.9 itself is separately pinned into the matrix even though it never had a STABLE Fill build (it's ALPHA-only, superseded same cycle by 1.21.10), since it's the plugin's actual production target.
+
+- Publishing (to both the rolling `latest` release and a permanent `git-<sha>` release) only happens if **every** leg of that matrix passes.
+- `.github/workflows/latest-drift-check.yml` is a safety net that fires after each `build.yml` run: it compares commit timestamps between `main` and whatever the `latest` tag currently points to, and re-dispatches `build.yml` if `latest` ever falls behind (e.g. a publish step silently no-op'd). It never republishes directly itself — it just re-triggers the real pipeline.
+- Matrix generation and server boot logic live in `.github/workflows/scripts/generate-matrix.sh` and `.github/workflows/scripts/smoke-test.sh`.
 
 If you want to move the target Minecraft version forward:
 
 1. Bump `paper-api` in `pom.xml` to the desired `X.Y.Z-R0.1-SNAPSHOT` (pre-26.1) or `YY.D.build.N-stable` (26.1+) from the [PaperMC repository](https://repo.papermc.io/repository/maven-public/io/papermc/paper/paper-api/) or [Fill](https://fill.papermc.io/).
 2. Bump `api-version` in `plugin.yml` to match the new major.minor.
-3. Bump `TARGET_MC_VERSION` in `.github/workflows/build.yml` to the same version so the CI smoke test actually boots against what the jar was compiled for.
+3. Bump `MIN_MC_VERSION` in `.github/workflows/build.yml` if you're intentionally dropping support for older versions — the smoke-test matrix is discovered dynamically, so you generally don't need to hand-list versions.
 4. Run `mvn clean package` and smoke-test spawning/combat/sound behavior in The End.
 
 ## Project structure
@@ -103,6 +145,7 @@ If you want to move the target Minecraft version forward:
 src/main/java/com/anarchyphantoms/phantomcontrol/
 ├── AnarchyPhantomsPlugin.java      # Plugin entrypoint, command handling, listener registration
 ├── PluginSettings.java             # Typed, reloadable view over config.yml
+├── PhantomEndSpawner.java          # Actively spawns phantoms above players in The End (per-player EntityScheduler)
 ├── PhantomSpawnListener.java       # Restricts natural spawns to The End + valid surface blocks
 ├── PhantomBehaviorListener.java    # Keeps phantoms passive until they take player damage
 ├── PhantomProvocationTracker.java  # Per-entity "provoked" state via PersistentDataContainer
