@@ -2,6 +2,11 @@ package com.anarchyphantoms.phantomcontrol;
 
 import java.util.List;
 import java.util.Optional;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.event.ClickEvent;
+import net.kyori.adventure.text.event.HoverEvent;
+import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
@@ -65,7 +70,7 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
                 return true;
             }
             if (args[0].equalsIgnoreCase("ver") || args[0].equalsIgnoreCase("version")) {
-                sender.sendMessage("[AnarchyPhantoms] " + buildInfo.summary());
+                sendVersion(sender);
                 return true;
             }
             if (args.length > 0 && args[0].equalsIgnoreCase("git")) {
@@ -125,6 +130,27 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
             sender.sendMessage("  /" + label + " reload - Reloads config.yml without a restart. (admin)");
             sender.sendMessage("  /" + label + " debug <on|off> - Toggles debug logging at runtime. (admin)");
         }
+    }
+
+    /**
+     * "/ap ver" - the plain-text build summary (commit/branch/build time),
+     * followed by a clickable, hoverable link to the plugin's source
+     * repository. The link is sent as its own Adventure component (rather
+     * than folded into the summary line) so every {@link CommandSender} -
+     * players and console alike - gets a properly clickable entry, with a
+     * plain fallback for anything console-side that doesn't render click
+     * events.
+     */
+    private void sendVersion(CommandSender sender) {
+        sender.sendMessage("[AnarchyPhantoms] " + buildInfo.summary());
+
+        Component repoLine = Component.text("Source: ", NamedTextColor.GRAY)
+                .append(Component.text(BuildInfo.REPO_URL, NamedTextColor.AQUA)
+                        .decorate(TextDecoration.UNDERLINED)
+                        .clickEvent(ClickEvent.openUrl(BuildInfo.REPO_URL))
+                        .hoverEvent(HoverEvent.showText(
+                                Component.text("Click to open the repository", NamedTextColor.GRAY))));
+        sender.sendMessage(repoLine);
     }
 
     /**

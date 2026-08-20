@@ -20,6 +20,9 @@ final class BuildInfo {
 
     private static final String UNKNOWN = "unknown";
 
+    /** Canonical source repository for this plugin, surfaced by "/ap ver". */
+    static final String REPO_URL = "https://github.com/cat768/anarchy-phantoms/";
+
     private final String commitAbbrev;
     private final String commitFull;
     private final String buildTime;
