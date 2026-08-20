@@ -1,5 +1,7 @@
 package com.anarchyphantoms.phantomcontrol;
 
+import java.util.List;
+import java.util.Optional;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
@@ -18,6 +20,7 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
     private PluginSettings settings;
     private PhantomProvocationTracker provocationTracker;
     private BuildInfo buildInfo;
+    private GitHistory gitHistory;
 
     @Override
     public void onEnable() {
@@ -26,6 +29,7 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
         this.settings = new PluginSettings(this);
         this.provocationTracker = new PhantomProvocationTracker(this);
         this.buildInfo = new BuildInfo(this);
+        this.gitHistory = new GitHistory(this);
 
         PhantomSpawnListener spawnListener = new PhantomSpawnListener(this);
         PhantomBehaviorListener behaviorListener = new PhantomBehaviorListener(this, provocationTracker);
@@ -58,6 +62,10 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
         if (command.getName().equalsIgnoreCase("anarchyphantoms")) {
             if (args.length > 0 && (args[0].equalsIgnoreCase("ver") || args[0].equalsIgnoreCase("version"))) {
                 sender.sendMessage("[AnarchyPhantoms] " + buildInfo.summary());
+                return true;
+            }
+            if (args.length > 0 && args[0].equalsIgnoreCase("git")) {
+                handleGitCommand(sender, args);
                 return true;
             }
             if (args.length > 0 && args[0].equalsIgnoreCase("reload")) {
@@ -93,10 +101,131 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
                 }
                 return true;
             }
-            sender.sendMessage("[AnarchyPhantoms] Usage: /anarchyphantoms ver | reload | debug <on|off>");
+            sender.sendMessage("[AnarchyPhantoms] Usage: /anarchyphantoms ver | git | reload | debug <on|off>");
             return true;
         }
         return false;
+    }
+
+    /**
+     * Handles "/ap git", "/ap git info <hash>", and "/ap git history [page]".
+     * Split out of {@link #onCommand} to keep that method's top-level
+     * dispatch readable now that the git subtree has its own arg parsing.
+     */
+    private void handleGitCommand(CommandSender sender, String[] args) {
+        // args[0] is "git" itself; args[1] (if present) is the git subcommand.
+        String sub = args.length > 1 ? args[1] : null;
+
+        if (sub == null) {
+            sendGitCurrentCommit(sender);
+            return;
+        }
+
+        if (sub.equalsIgnoreCase("info")) {
+            if (args.length < 3) {
+                sender.sendMessage("[AnarchyPhantoms] Usage: /anarchyphantoms git info <hash>");
+                return;
+            }
+            sendGitInfo(sender, args[2]);
+            return;
+        }
+
+        if (sub.equalsIgnoreCase("history")) {
+            int page = 1;
+            if (args.length >= 3) {
+                try {
+                    page = Integer.parseInt(args[2]);
+                } catch (NumberFormatException e) {
+                    sender.sendMessage("[AnarchyPhantoms] Usage: /anarchyphantoms git history [page]");
+                    return;
+                }
+            }
+            sendGitHistory(sender, page);
+            return;
+        }
+
+        sender.sendMessage("[AnarchyPhantoms] Usage: /anarchyphantoms git [info <hash>|history [page]]");
+    }
+
+    /** "/ap git" - current build's commit, expanded with the full commit message. */
+    private void sendGitCurrentCommit(CommandSender sender) {
+        sender.sendMessage("[AnarchyPhantoms] " + buildInfo.summary());
+
+        if (!buildInfo.isLoaded()) {
+            return;
+        }
+
+        // The current build's own commit may or may not be in the baked-in
+        // history list (e.g. history export failed, or ran with a shallow
+        // clone while git-commit-id still found the HEAD commit fine via
+        // its own separate lookup) - fall back gracefully if it's absent.
+        Optional<GitHistory.CommitEntry> current = gitHistory.findByHash(buildInfo.getCommitFull());
+        if (current.isEmpty()) {
+            sender.sendMessage("[AnarchyPhantoms] (Full commit message unavailable - not in baked-in history.)");
+            return;
+        }
+
+        sendCommitDetail(sender, current.get());
+    }
+
+    /** "/ap git info <hash>" - full detail for one specific baked-in commit. */
+    private void sendGitInfo(CommandSender sender, String hashQuery) {
+        if (!gitHistory.isLoaded() || gitHistory.getEntries().isEmpty()) {
+            sender.sendMessage("[AnarchyPhantoms] No commit history is embedded in this build.");
+            return;
+        }
+
+        Optional<GitHistory.CommitEntry> entry = gitHistory.findByHash(hashQuery);
+        if (entry.isEmpty()) {
+            sender.sendMessage("[AnarchyPhantoms] No commit matching '" + hashQuery
+                    + "' found in the last " + gitHistory.getEntries().size() + " baked-in commits "
+                    + "(either it doesn't exist, or the prefix is ambiguous).");
+            return;
+        }
+
+        sendCommitDetail(sender, entry.get());
+    }
+
+    private static final int HISTORY_PAGE_SIZE = 8;
+
+    /** "/ap git history [page]" - paginated list of baked-in commits, newest first. */
+    private void sendGitHistory(CommandSender sender, int page) {
+        List<GitHistory.CommitEntry> entries = gitHistory.getEntries();
+
+        if (!gitHistory.isLoaded() || entries.isEmpty()) {
+            sender.sendMessage("[AnarchyPhantoms] No commit history is embedded in this build.");
+            return;
+        }
+
+        int totalPages = Math.max(1, (entries.size() + HISTORY_PAGE_SIZE - 1) / HISTORY_PAGE_SIZE);
+        if (page < 1 || page > totalPages) {
+            sender.sendMessage("[AnarchyPhantoms] Invalid page " + page + " (valid range: 1-" + totalPages + ").");
+            return;
+        }
+
+        int fromIndex = (page - 1) * HISTORY_PAGE_SIZE;
+        int toIndex = Math.min(fromIndex + HISTORY_PAGE_SIZE, entries.size());
+
+        sender.sendMessage("[AnarchyPhantoms] Commit history (page " + page + "/" + totalPages + "):");
+        for (GitHistory.CommitEntry entry : entries.subList(fromIndex, toIndex)) {
+            sender.sendMessage("  " + entry.abbrev() + " - " + entry.subject() + " (" + entry.formattedTime() + ")");
+        }
+        if (page < totalPages) {
+            sender.sendMessage("[AnarchyPhantoms] Use /anarchyphantoms git history " + (page + 1) + " for more.");
+        }
+    }
+
+    /** Shared full-detail rendering used by both "/ap git" and "/ap git info <hash>". */
+    private void sendCommitDetail(CommandSender sender, GitHistory.CommitEntry entry) {
+        sender.sendMessage("[AnarchyPhantoms] " + entry.abbrev() + " (" + entry.hash() + ")");
+        sender.sendMessage("  Date: " + entry.formattedTime());
+        sender.sendMessage("  Subject: " + entry.subject());
+        if (entry.hasBody()) {
+            sender.sendMessage("  Description:");
+            for (String line : entry.body().split("\n", -1)) {
+                sender.sendMessage("    " + line);
+            }
+        }
     }
 
     public PluginSettings getSettings() {
@@ -109,5 +238,9 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
 
     public BuildInfo getBuildInfo() {
         return buildInfo;
+    }
+
+    public GitHistory getGitHistory() {
+        return gitHistory;
     }
 }

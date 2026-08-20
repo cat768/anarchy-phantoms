@@ -91,6 +91,48 @@
                     <dateFormatTimeZone>UTC</dateFormatTimeZone>
                 </configuration>
             </plugin>
+            <!--
+              Dumps the last MAX_GIT_HISTORY_ENTRIES commits (hash, epoch
+              seconds, subject, body) into target/classes/git-history.properties
+              at build time, embedding a static commit log into the jar. Read
+              at runtime by GitHistory for "/ap git info <hash>" and
+              "/ap git history". This is a *snapshot frozen at build time* -
+              it cannot grow after the jar is built, and it only ever shows
+              commits that existed in the .git directory the build ran in.
+
+              REQUIRES a non-shallow checkout (fetch-depth >= 25, or 0 for
+              full history) in CI - actions/checkout@v5 defaults to
+              fetch-depth: 1, which would silently truncate this to a single
+              commit. See .github/workflows/build.yml.
+
+              Same fail-soft posture as git-commit-id-maven-plugin above: if
+              git is missing or this is a source-only checkout with no .git,
+              the script below writes an empty properties file rather than
+              failing the build, and GitHistory falls back to "no history
+              available" at runtime.
+            -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.5.0</version>
+                <executions>
+                    <execution>
+                        <id>export-git-history</id>
+                        <phase>initialize</phase>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <executable>bash</executable>
+                            <arguments>
+                                <argument>${project.basedir}/scripts/export-git-history.sh</argument>
+                                <argument>${project.build.outputDirectory}/git-history.properties</argument>
+                                <argument>25</argument>
+                            </arguments>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
 </project>

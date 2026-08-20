@@ -46,6 +46,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          # Default fetch-depth: 1 (shallow) would leave git-commit-id-maven-plugin
+          # fine (it only needs HEAD) but would silently truncate
+          # scripts/export-git-history.sh's `git log -25` down to a single
+          # commit, breaking "/ap git history" paging. 30 gives the 25-commit
+          # export a small margin; bump this if MAX history entries increases.
+          fetch-depth: 30
 
       - name: Set up JDK 21
         uses: actions/setup-java@v5
