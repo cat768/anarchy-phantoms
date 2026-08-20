@@ -64,7 +64,30 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
                 sender.sendMessage("[AnarchyPhantoms] Configuration reloaded.");
                 return true;
             }
-            sender.sendMessage("[AnarchyPhantoms] Usage: /anarchyphantoms reload");
+            if (args.length > 0 && args[0].equalsIgnoreCase("debug")) {
+                if (!sender.hasPermission("anarchyphantoms.admin")) {
+                    sender.sendMessage("You do not have permission to do that.");
+                    return true;
+                }
+                if (args.length < 2) {
+                    sender.sendMessage("[AnarchyPhantoms] Debug logging is currently "
+                            + (settings.isDebugEnabled() ? "ON" : "OFF") + ".");
+                    sender.sendMessage("[AnarchyPhantoms] Usage: /anarchyphantoms debug <on|off>");
+                    return true;
+                }
+                String state = args[1];
+                if (state.equalsIgnoreCase("on")) {
+                    settings.setDebugRuntimeOverride(true);
+                    sender.sendMessage("[AnarchyPhantoms] Debug logging enabled.");
+                } else if (state.equalsIgnoreCase("off")) {
+                    settings.setDebugRuntimeOverride(false);
+                    sender.sendMessage("[AnarchyPhantoms] Debug logging disabled.");
+                } else {
+                    sender.sendMessage("[AnarchyPhantoms] Usage: /anarchyphantoms debug <on|off>");
+                }
+                return true;
+            }
+            sender.sendMessage("[AnarchyPhantoms] Usage: /anarchyphantoms reload | debug <on|off>");
             return true;
         }
         return false;
