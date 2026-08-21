@@ -16,3 +16,6 @@ permissions:
   anarchyphantoms.admin:
     description: Allows use of AnarchyPhantoms admin commands.
     default: op
+  anarchyphantoms.debug:
+    description: Receive AnarchyPhantoms debug lines (spawns, aggro changes) in chat while debug mode is on. Independent of anarchyphantoms.admin.
+    default: op

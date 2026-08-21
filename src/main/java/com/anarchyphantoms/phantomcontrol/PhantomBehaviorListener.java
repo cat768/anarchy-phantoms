@@ -19,12 +19,23 @@ import org.bukkit.event.entity.EntityTargetLivingEntityEvent;
  */
 public final class PhantomBehaviorListener implements Listener {
 
+    // How often each provoked phantom rechecks whether its provocation
+    // window has expired, purely to fire the "reverted to passive" debug
+    // notification at roughly the moment it actually happens rather than
+    // only discovering it lazily next time something calls
+    // isCurrentlyProvoked(). Same per-entity EntityScheduler pattern as
+    // PhantomSoundListener's silence recheck, for the same Folia-safety
+    // reasons documented there.
+    private static final long EXPIRY_RECHECK_INTERVAL_TICKS = 20L; // once per second
+
     private final AnarchyPhantomsPlugin plugin;
     private final PhantomProvocationTracker tracker;
+    private final PhantomDebugNotifier debugNotifier;
 
     public PhantomBehaviorListener(AnarchyPhantomsPlugin plugin, PhantomProvocationTracker tracker) {
         this.plugin = plugin;
         this.tracker = tracker;
+        this.debugNotifier = plugin.getDebugNotifier();
     }
 
     /**
@@ -44,6 +55,49 @@ public final class PhantomBehaviorListener implements Listener {
         // marked not-provoked (PDC is empty by default on a new entity, so
         // this is mostly defensive in case of plugin reload mid-life).
         phantom.setTarget(null);
+
+        // Only relevant if provocation can actually expire; a permanent
+        // provocation window (-1) never needs an expiry recheck.
+        if (plugin.getSettings().getProvokedDurationTicks() >= 0) {
+            startExpiryRecheckTask(phantom);
+        }
+    }
+
+    /**
+     * Schedules this phantom's own periodic provocation-expiry check via its
+     * EntityScheduler, so a time-limited provocation window lapsing (which
+     * fires no Bukkit event on its own) still produces a timely
+     * "reverted to passive" debug line instead of only being noticed the
+     * next time the phantom happens to try targeting something.
+     */
+    private void startExpiryRecheckTask(Phantom phantom) {
+        phantom.getScheduler().runAtFixedRate(
+                plugin,
+                task -> {
+                    if (!plugin.getSettings().isPassiveUntilAttacked()) {
+                        task.cancel();
+                        return;
+                    }
+                    if (!tracker.isProvoked(phantom)) {
+                        // Never provoked yet, or already handled below and
+                        // cleared - either way nothing to expire right now.
+                        return;
+                    }
+                    if (isCurrentlyProvoked(phantom)) {
+                        return; // still within the provocation window
+                    }
+                    // Window just lapsed: clear tracked state and report the
+                    // passive/silent transition once, then stop rechecking
+                    // this specific phantom - it only re-arms via a fresh
+                    // onPhantomDamaged provocation, which starts a new task.
+                    tracker.clearProvoked(phantom);
+                    debugNotifier.becamePassive(phantom.getLocation(), "provocation window expired");
+                    task.cancel();
+                },
+                null, // retired callback: phantom already gone, nothing to clean up
+                EXPIRY_RECHECK_INTERVAL_TICKS,
+                EXPIRY_RECHECK_INTERVAL_TICKS
+        );
     }
 
     /**
@@ -100,7 +154,15 @@ public final class PhantomBehaviorListener implements Listener {
             return;
         }
 
-        tracker.markProvoked(phantom, phantom.getWorld().getFullTime());
+        boolean newlyProvoked = tracker.markProvoked(phantom, phantom.getWorld().getFullTime());
+        if (newlyProvoked) {
+            debugNotifier.becameAggressive(phantom.getLocation(), "attacked by player " + attacker.getName());
+            // (Re-)arm the expiry recheck now that this phantom has a fresh
+            // provocation window to eventually fall out of.
+            if (plugin.getSettings().getProvokedDurationTicks() >= 0) {
+                startExpiryRecheckTask(phantom);
+            }
+        }
     }
 
     /**

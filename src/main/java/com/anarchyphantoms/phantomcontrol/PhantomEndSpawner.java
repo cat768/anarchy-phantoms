@@ -54,10 +54,14 @@ public final class PhantomEndSpawner implements Listener {
     static final int MAX_HEIGHT_ABOVE_GROUND = 30;
 
     private final AnarchyPhantomsPlugin plugin;
+    private final PhantomDebugNotifier debugNotifier;
+    private final PhantomSpawnCauseTag spawnCauseTag;
     private final Random random = new Random();
 
     public PhantomEndSpawner(AnarchyPhantomsPlugin plugin) {
         this.plugin = plugin;
+        this.debugNotifier = plugin.getDebugNotifier();
+        this.spawnCauseTag = plugin.getSpawnCauseTag();
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -91,7 +95,7 @@ public final class PhantomEndSpawner implements Listener {
     private void tryEndSpawn(Player player) {
         PluginSettings settings = plugin.getSettings();
         if (!settings.isEndSpawningEnabled()) {
-            debug(player, "end-spawning disabled in config");
+            debugNotifier.debug(player, "end-spawning disabled in config");
             return;
         }
         if (!player.isOnline() || !player.isValid()) {
@@ -100,7 +104,7 @@ public final class PhantomEndSpawner implements Listener {
 
         World world = player.getWorld();
         if (world.getEnvironment() != World.Environment.THE_END) {
-            debug(player, "not in The End (env=" + world.getEnvironment() + ")");
+            debugNotifier.debug(player, "not in The End (env=" + world.getEnvironment() + ")");
             return;
         }
 
@@ -108,23 +112,23 @@ public final class PhantomEndSpawner implements Listener {
         // "attempt every so often, not guaranteed" phantom spawn behavior.
         double roll = random.nextDouble();
         if (roll > settings.getEndSpawnChance()) {
-            debug(player, "chance roll failed (" + roll + " > " + settings.getEndSpawnChance() + ")");
+            debugNotifier.debug(player, "chance roll failed (" + roll + " > " + settings.getEndSpawnChance() + ")");
             return;
         }
 
         int nearby = countNearbyPhantoms(player, settings.getSpawnCheckRadius());
         if (nearby >= settings.getMaxPhantomsPerPlayer()) {
-            debug(player, "at phantom cap (" + nearby + "/" + settings.getMaxPhantomsPerPlayer() + " within " + settings.getSpawnCheckRadius() + " blocks)");
+            debugNotifier.debug(player, "at phantom cap (" + nearby + "/" + settings.getMaxPhantomsPerPlayer() + " within " + settings.getSpawnCheckRadius() + " blocks)");
             return;
         }
 
-        debug(player, "roll passed (" + roll + " <= " + settings.getEndSpawnChance() + "), nearby=" + nearby + ", attempting to pick location");
+        debugNotifier.debug(player, "roll passed (" + roll + " <= " + settings.getEndSpawnChance() + "), nearby=" + nearby + ", attempting to pick location");
         Location spawnLocation = pickSpawnLocation(player, settings);
         if (spawnLocation == null) {
-            debug(player, "pickSpawnLocation returned null (no allowed surface block found in the sampled column)");
+            debugNotifier.debug(player, "pickSpawnLocation returned null (no allowed surface block found in the sampled column)");
             return;
         }
-        debug(player, "valid location found at " + spawnLocation.getBlockX() + "," + spawnLocation.getBlockY() + "," + spawnLocation.getBlockZ() + ", spawning phantom");
+        debugNotifier.debug(player, "valid location found at " + spawnLocation.getBlockX() + "," + spawnLocation.getBlockY() + "," + spawnLocation.getBlockZ() + ", spawning phantom");
 
         // World#spawn(..., SpawnReason) fires CreatureSpawnEvent with the
         // given reason. We pass NATURAL so PhantomSpawnListener's existing
@@ -133,34 +137,34 @@ public final class PhantomEndSpawner implements Listener {
         // "is this a valid spawn spot" instead of duplicating the surface
         // check as an authority in two places.
         //
+        // The pre-spawn Consumer<Phantom> runs BEFORE CreatureSpawnEvent is
+        // fired (it's Paper's hook for configuring an entity pre-add-to-world),
+        // so tagging the cause here guarantees PhantomSpawnListener's handler
+        // - which runs synchronously inside this same world.spawn() call -
+        // always sees the tag already set when it builds its debug report.
+        // This is what lets attribution ("caused by which player") live on
+        // the single spawn-report call site in PhantomSpawnListener instead
+        // of being duplicated here.
+        //
         // If PhantomSpawnListener (or any other plugin) cancels the
         // resulting CreatureSpawnEvent, Paper does NOT throw and does NOT
         // reliably return null from every World#spawn overload - the only
         // safe way to detect a vetoed spawn is to check whether the entity
         // Bukkit handed back is still valid/un-removed immediately after.
         Phantom phantom = world.spawn(spawnLocation, Phantom.class,
-                CreatureSpawnEvent.SpawnReason.NATURAL);
+                CreatureSpawnEvent.SpawnReason.NATURAL,
+                p -> spawnCauseTag.tag(p, "End-spawner near player " + player.getName()));
 
         if (phantom == null || phantom.isDead() || !phantom.isValid()) {
             // PhantomSpawnListener vetoed it (e.g. surface check failed due
             // to a race between our pickSpawnLocation and the world since),
             // or something else removed it immediately. Nothing further to do.
-            debug(player, "world.spawn() call was vetoed (likely by PhantomSpawnListener or another plugin)");
+            debugNotifier.debug(player, "world.spawn() call was vetoed (likely by PhantomSpawnListener or another plugin)");
             return;
         }
-        debug(player, "phantom spawn SUCCEEDED at " + spawnLocation.getBlockX() + "," + spawnLocation.getBlockY() + "," + spawnLocation.getBlockZ());
-    }
-
-    /**
-     * Logs a debug line to console only if debug mode is currently on
-     * (config default, or runtime-toggled via /ap debug). Never sent to
-     * players in chat - console/log-file only, regardless of who is op.
-     */
-    private void debug(Player player, String message) {
-        if (!plugin.getSettings().isDebugEnabled()) {
-            return;
-        }
-        plugin.getLogger().info("[AP-DEBUG] " + player.getName() + ": " + message);
+        // Successful-spawn debug reporting already happened inside
+        // PhantomSpawnListener.onCreatureSpawn (same call stack, via the
+        // spawn-cause tag set above) - nothing further to report here.
     }
 
     /**

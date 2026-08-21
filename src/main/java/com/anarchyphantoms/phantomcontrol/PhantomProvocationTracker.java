@@ -23,11 +23,19 @@ public final class PhantomProvocationTracker {
 
     /**
      * Marks the phantom as provoked (hostile + vocal) as of the given world tick.
+     *
+     * @return true if this call transitioned the phantom from not-provoked to
+     *         provoked (i.e. this is a genuinely new provocation, not a
+     *         repeat hit on an already-hostile phantom). Callers use this to
+     *         decide whether a passive-to-aggressive debug/notification
+     *         event should fire.
      */
-    public void markProvoked(Phantom phantom, long currentTick) {
+    public boolean markProvoked(Phantom phantom, long currentTick) {
+        boolean wasProvoked = isProvoked(phantom);
         PersistentDataContainer data = phantom.getPersistentDataContainer();
         data.set(provokedKey, PersistentDataType.BYTE, (byte) 1);
         data.set(provokedAtKey, PersistentDataType.LONG, currentTick);
+        return !wasProvoked;
     }
 
     public void clearProvoked(Phantom phantom) {

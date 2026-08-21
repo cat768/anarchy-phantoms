@@ -24,6 +24,8 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
 
     private PluginSettings settings;
     private PhantomProvocationTracker provocationTracker;
+    private PhantomDebugNotifier debugNotifier;
+    private PhantomSpawnCauseTag spawnCauseTag;
     private BuildInfo buildInfo;
     private GitHistory gitHistory;
 
@@ -33,6 +35,8 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
 
         this.settings = new PluginSettings(this);
         this.provocationTracker = new PhantomProvocationTracker(this);
+        this.debugNotifier = new PhantomDebugNotifier(this);
+        this.spawnCauseTag = new PhantomSpawnCauseTag(this);
         this.buildInfo = new BuildInfo(this);
         this.gitHistory = new GitHistory(this);
 
@@ -129,6 +133,10 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
         if (isAdmin) {
             sender.sendMessage("  /" + label + " reload - Reloads config.yml without a restart. (admin)");
             sender.sendMessage("  /" + label + " debug <on|off> - Toggles debug logging at runtime. (admin)");
+        }
+        if (sender.hasPermission(PhantomDebugNotifier.DEBUG_VIEW_PERMISSION)) {
+            sender.sendMessage("[AnarchyPhantoms] You have '" + PhantomDebugNotifier.DEBUG_VIEW_PERMISSION
+                    + "' - debug lines (spawns, aggro changes) will show in your chat while debug mode is on.");
         }
     }
 
@@ -280,6 +288,14 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
 
     public PhantomProvocationTracker getProvocationTracker() {
         return provocationTracker;
+    }
+
+    public PhantomDebugNotifier getDebugNotifier() {
+        return debugNotifier;
+    }
+
+    public PhantomSpawnCauseTag getSpawnCauseTag() {
+        return spawnCauseTag;
     }
 
     public BuildInfo getBuildInfo() {
