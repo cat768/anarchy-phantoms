@@ -10,9 +10,15 @@ import org.bukkit.event.entity.CreatureSpawnEvent;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerChangedWorldEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.scheduler.ScheduledTask;
 
+import java.util.Map;
 import java.util.Random;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
@@ -38,6 +44,21 @@ import java.util.concurrent.ThreadLocalRandom;
  * see the design note in PhantomSoundListener for why a single global task
  * touching arbitrary entities/players is unsafe under Folia's regionized
  * threading model.
+ *
+ * The task is only alive while a player is actually in THE_END. There is
+ * no vanilla or plugin-provided phantom spawn cycle outside The End (see
+ * class-level note above), so a player in the Overworld or Nether has zero
+ * chance of ever passing tryEndSpawn's environment check - running the task
+ * for them anyway would just roll dice against a check that can only ever
+ * fail, forever, for the entire time they're not in The End. Instead:
+ *  - PlayerChangedWorldEvent starts the task on entering THE_END and stops
+ *    (cancels) it on leaving.
+ *  - PlayerJoinEvent/startTaskForExisting start it immediately if the
+ *    player is already in THE_END at join/reload time.
+ *  - PlayerQuitEvent (and the EntityScheduler's own retired-callback) clean
+ *    up the tracking map so it can't leak entries for disconnected players.
+ * This removes the "not in The End" no-op entirely for anyone not in The
+ * End, rather than just silencing its debug output.
  */
 public final class PhantomEndSpawner implements Listener {
 
@@ -58,6 +79,14 @@ public final class PhantomEndSpawner implements Listener {
     private final PhantomSpawnCauseTag spawnCauseTag;
     private final Random random = new Random();
 
+    /**
+     * Tracks the running task per player, keyed by UUID, so we can cancel it
+     * on world-leave/quit and avoid double-starting it if events race (e.g.
+     * a stray extra PlayerChangedWorldEvent). Only ever contains entries for
+     * players currently believed to be in THE_END with a live task.
+     */
+    private final Map<UUID, ScheduledTask> activeTasks = new ConcurrentHashMap<>();
+
     public PhantomEndSpawner(AnarchyPhantomsPlugin plugin) {
         this.plugin = plugin;
         this.debugNotifier = plugin.getDebugNotifier();
@@ -66,30 +95,77 @@ public final class PhantomEndSpawner implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerJoin(PlayerJoinEvent event) {
-        startTaskFor(event.getPlayer());
+        Player player = event.getPlayer();
+        if (player.getWorld().getEnvironment() == World.Environment.THE_END) {
+            startTaskFor(player);
+        }
     }
 
     /**
-     * Starts this player's own repeating eligibility/spawn check. Using
-     * Player#getScheduler() means the callback only ever runs on the thread
-     * that currently owns this specific player, following them across
-     * regions on Folia, and behaves like a normal repeating task on
+     * Starts (or stops) the task in response to a dimension change. This is
+     * the main entry/exit point in normal play - joining already-in-The-End
+     * is comparatively rare and handled separately by onPlayerJoin above.
+     */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onPlayerChangedWorld(PlayerChangedWorldEvent event) {
+        Player player = event.getPlayer();
+        if (player.getWorld().getEnvironment() == World.Environment.THE_END) {
+            startTaskFor(player);
+        } else {
+            stopTaskFor(player.getUniqueId());
+        }
+    }
+
+    /**
+     * Stops leaking a tracking-map entry for a player who has disconnected.
+     * The EntityScheduler's own retired-callback already stops the
+     * scheduled task itself when a player quits, so this is bookkeeping
+     * cleanup only, not what actually halts execution.
+     */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onPlayerQuit(PlayerQuitEvent event) {
+        activeTasks.remove(event.getPlayer().getUniqueId());
+    }
+
+    /**
+     * Starts this player's own repeating eligibility/spawn check, but only
+     * if they're not already running one (covers onPlayerJoin firing for a
+     * player already in THE_END, e.g. after a /reload while inside it).
+     * Using Player#getScheduler() means the callback only ever runs on the
+     * thread that currently owns this specific player, following them
+     * across regions on Folia, and behaves like a normal repeating task on
      * standard Paper. If the player disconnects before a run, the "retired"
-     * callback fires instead and the schedule stops itself - no manual
-     * cancel bookkeeping required.
+     * callback fires instead and the schedule stops itself.
      */
     public void startTaskForExisting(Player player) {
-        startTaskFor(player);
+        if (player.getWorld().getEnvironment() == World.Environment.THE_END) {
+            startTaskFor(player);
+        }
     }
 
     private void startTaskFor(Player player) {
-        player.getScheduler().runAtFixedRate(
+        UUID id = player.getUniqueId();
+        // Already have a live task for this player (e.g. duplicate/late
+        // join+world event ordering) - don't stack a second one.
+        if (activeTasks.containsKey(id)) {
+            return;
+        }
+
+        ScheduledTask task = player.getScheduler().runAtFixedRate(
                 plugin,
-                task -> tryEndSpawn(player),
-                null, // retired callback: player already left, nothing to clean up
+                t -> tryEndSpawn(player),
+                () -> activeTasks.remove(id), // retired callback: player left, drop bookkeeping
                 CHECK_INTERVAL_TICKS,
                 CHECK_INTERVAL_TICKS
         );
+        activeTasks.put(id, task);
+    }
+
+    private void stopTaskFor(UUID id) {
+        ScheduledTask task = activeTasks.remove(id);
+        if (task != null) {
+            task.cancel();
+        }
     }
 
     private void tryEndSpawn(Player player) {
@@ -102,11 +178,14 @@ public final class PhantomEndSpawner implements Listener {
             return;
         }
 
+        // This task now only runs while the player is in THE_END (see
+        // onPlayerChangedWorld/startTaskFor), so no env check or "not in
+        // The End" bookkeeping is needed here anymore. A same-tick dimension
+        // change racing this callback is still possible on Folia; re-reading
+        // player.getWorld() here (rather than caching it earlier) means a
+        // same-tick change is simply reflected in world, same as any other
+        // same-tick race in this codebase.
         World world = player.getWorld();
-        if (world.getEnvironment() != World.Environment.THE_END) {
-            debugNotifier.debug(player, "not in The End (env=" + world.getEnvironment() + ")");
-            return;
-        }
 
         // Per-tick-cycle random chance, similar in spirit to vanilla's own
         // "attempt every so often, not guaranteed" phantom spawn behavior.
