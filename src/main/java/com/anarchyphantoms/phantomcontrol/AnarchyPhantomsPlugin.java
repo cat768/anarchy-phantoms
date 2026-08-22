@@ -28,6 +28,7 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
     private PhantomSpawnCauseTag spawnCauseTag;
     private BuildInfo buildInfo;
     private GitHistory gitHistory;
+    private PluginUpdater pluginUpdater;
 
     @Override
     public void onEnable() {
@@ -39,6 +40,7 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
         this.spawnCauseTag = new PhantomSpawnCauseTag(this);
         this.buildInfo = new BuildInfo(this);
         this.gitHistory = new GitHistory(this);
+        this.pluginUpdater = new PluginUpdater(this);
 
         PhantomSpawnListener spawnListener = new PhantomSpawnListener(this);
         PhantomBehaviorListener behaviorListener = new PhantomBehaviorListener(this, provocationTracker);
@@ -91,6 +93,26 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
                 sender.sendMessage("[AnarchyPhantoms] Configuration reloaded.");
                 return true;
             }
+            if (args.length > 0 && args[0].equalsIgnoreCase("update")) {
+                if (!sender.hasPermission("anarchyphantoms.admin")) {
+                    sender.sendMessage("You do not have permission to do that.");
+                    return true;
+                }
+                pluginUpdater.update(sender);
+                return true;
+            }
+            if (args.length > 0 && args[0].equalsIgnoreCase("rollback")) {
+                if (!sender.hasPermission("anarchyphantoms.admin")) {
+                    sender.sendMessage("You do not have permission to do that.");
+                    return true;
+                }
+                if (args.length < 2) {
+                    sender.sendMessage("[AnarchyPhantoms] Usage: /anarchyphantoms rollback <hash>");
+                    return true;
+                }
+                pluginUpdater.rollback(sender, args[1]);
+                return true;
+            }
             if (args.length > 0 && args[0].equalsIgnoreCase("debug")) {
                 if (!sender.hasPermission("anarchyphantoms.admin")) {
                     sender.sendMessage("You do not have permission to do that.");
@@ -133,6 +155,8 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
         if (isAdmin) {
             sender.sendMessage("  /" + label + " reload - Reloads config.yml without a restart. (admin)");
             sender.sendMessage("  /" + label + " debug <on|off> - Toggles debug logging at runtime. (admin)");
+            sender.sendMessage("  /" + label + " update - Stages the latest CI-validated build. Requires a restart to apply. (admin)");
+            sender.sendMessage("  /" + label + " rollback <hash> - Stages a specific past CI-validated build. Requires a restart to apply. (admin)");
         }
         if (sender.hasPermission(PhantomDebugNotifier.DEBUG_VIEW_PERMISSION)) {
             sender.sendMessage("[AnarchyPhantoms] You have '" + PhantomDebugNotifier.DEBUG_VIEW_PERMISSION
