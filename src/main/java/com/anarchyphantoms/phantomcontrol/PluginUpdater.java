@@ -61,6 +61,7 @@ final class PluginUpdater {
         this.plugin = plugin;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(REQUEST_TIMEOUT)
+                .followRedirects(HttpClient.Redirect.NORMAL)
                 .build();
     }
 
