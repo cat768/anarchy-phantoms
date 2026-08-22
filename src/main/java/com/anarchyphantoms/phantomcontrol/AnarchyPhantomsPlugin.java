@@ -71,6 +71,13 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (command.getName().equalsIgnoreCase("anarchyphantoms")) {
+            // Every subcommand is operator-only. Gate here, once, at the top,
+            // so nothing added later can accidentally slip through unguarded.
+            if (!sender.hasPermission("anarchyphantoms.admin")) {
+                sender.sendMessage("You do not have permission to do that.");
+                return true;
+            }
+
             if (args.length == 0 || args[0].equalsIgnoreCase("help")) {
                 sendHelp(sender, label);
                 return true;
@@ -84,28 +91,16 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
                 return true;
             }
             if (args.length > 0 && args[0].equalsIgnoreCase("reload")) {
-                if (!sender.hasPermission("anarchyphantoms.admin")) {
-                    sender.sendMessage("You do not have permission to do that.");
-                    return true;
-                }
                 reloadConfig();
                 settings.reload();
                 sender.sendMessage("[AnarchyPhantoms] Configuration reloaded.");
                 return true;
             }
             if (args.length > 0 && args[0].equalsIgnoreCase("update")) {
-                if (!sender.hasPermission("anarchyphantoms.admin")) {
-                    sender.sendMessage("You do not have permission to do that.");
-                    return true;
-                }
                 pluginUpdater.update(sender);
                 return true;
             }
             if (args.length > 0 && args[0].equalsIgnoreCase("rollback")) {
-                if (!sender.hasPermission("anarchyphantoms.admin")) {
-                    sender.sendMessage("You do not have permission to do that.");
-                    return true;
-                }
                 if (args.length < 2) {
                     sender.sendMessage("[AnarchyPhantoms] Usage: /anarchyphantoms rollback <hash>");
                     return true;
@@ -114,10 +109,6 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
                 return true;
             }
             if (args.length > 0 && args[0].equalsIgnoreCase("debug")) {
-                if (!sender.hasPermission("anarchyphantoms.admin")) {
-                    sender.sendMessage("You do not have permission to do that.");
-                    return true;
-                }
                 if (args.length < 2) {
                     sender.sendMessage("[AnarchyPhantoms] Debug logging is currently "
                             + (settings.isDebugEnabled() ? "ON" : "OFF") + ".");
@@ -142,22 +133,18 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
         return false;
     }
 
-    /** "/ap" or "/ap help" - lists all subcommands, with admin-only ones marked. */
+    /** "/ap" or "/ap help" - lists all subcommands. Only reachable by admins (see onCommand). */
     private void sendHelp(CommandSender sender, String label) {
-        boolean isAdmin = sender.hasPermission("anarchyphantoms.admin");
-
         sender.sendMessage("[AnarchyPhantoms] Commands:");
         sender.sendMessage("  /" + label + " help - Shows this list.");
         sender.sendMessage("  /" + label + " ver - Shows the running build's version/commit info.");
         sender.sendMessage("  /" + label + " git - Shows the current build's commit, with full message.");
         sender.sendMessage("  /" + label + " git info <hash> - Shows full detail for a specific baked-in commit.");
         sender.sendMessage("  /" + label + " git history [page] - Lists baked-in commit history, newest first.");
-        if (isAdmin) {
-            sender.sendMessage("  /" + label + " reload - Reloads config.yml without a restart. (admin)");
-            sender.sendMessage("  /" + label + " debug <on|off> - Toggles debug logging at runtime. (admin)");
-            sender.sendMessage("  /" + label + " update - Stages the latest CI-validated build. Requires a restart to apply. (admin)");
-            sender.sendMessage("  /" + label + " rollback <hash> - Stages a specific past CI-validated build. Requires a restart to apply. (admin)");
-        }
+        sender.sendMessage("  /" + label + " reload - Reloads config.yml without a restart.");
+        sender.sendMessage("  /" + label + " debug <on|off> - Toggles debug logging at runtime.");
+        sender.sendMessage("  /" + label + " update - Stages the latest CI-validated build. Requires a restart to apply.");
+        sender.sendMessage("  /" + label + " rollback <hash> - Stages a specific past CI-validated build. Requires a restart to apply.");
         if (sender.hasPermission(PhantomDebugNotifier.DEBUG_VIEW_PERMISSION)) {
             sender.sendMessage("[AnarchyPhantoms] You have '" + PhantomDebugNotifier.DEBUG_VIEW_PERMISSION
                     + "' - debug lines (spawns, aggro changes) will show in your chat while debug mode is on.");
