@@ -115,13 +115,29 @@ All subcommands work under either `/anarchyphantoms` or its shorter alias `/ap`.
 
 | Command | Description | Permission | Default |
 |---|---|---|---|
-| `/ap` or `/ap help` | Lists available subcommands (admin-only ones are only shown to admins). | — | everyone |
-| `/ap ver` (alias `version`) | Shows the running build's version/commit info. | — | everyone |
+| `/ap` or `/ap help` | Lists available subcommands (admin-only ones are only shown to admins), and tells the sender whether they currently hold `anarchyphantoms.debug`. | — | everyone |
+| `/ap ver` (alias `version`) | Shows the running build's version/commit info, plus a clickable link to the GitHub repo. | — | everyone |
 | `/ap git` | Shows the current build's commit, with its full commit message. | — | everyone |
 | `/ap git info <hash>` | Shows full detail for a specific baked-in commit. | — | everyone |
 | `/ap git history [page]` | Lists baked-in commit history, newest first, 8 per page. | — | everyone |
 | `/ap reload` | Reloads `config.yml` without a server restart. Note: a live `/ap debug` runtime override (if set) is *not* cleared by this — see below. | `anarchyphantoms.admin` | op |
-| `/ap debug <on\|off>` | Toggles debug logging at runtime, overriding `debug.enabled` in `config.yml` until the next restart or another `/ap debug` call. Running it with no `on`/`off` argument reports the current state. | `anarchyphantoms.admin` | op |
+| `/ap debug <on\|off>` | Toggles debug logging at runtime, overriding `debug.enabled` in `config.yml` until the next restart or another `/ap debug` call. Running it with no `on`/`off` argument reports the current state. See [Debug output](#debug-output) below for what this reports and to whom. | `anarchyphantoms.admin` | op |
+| `/ap update` | Fetches the latest CI-validated build (the `latest` GitHub release) and stages it into `plugins/update/`. Applied on the **next server restart**, not live. | `anarchyphantoms.admin` | op |
+| `/ap rollback <hash>` | Fetches the CI-validated build for a specific commit (the `git-<hash>` GitHub release) and stages it the same way. Fails cleanly if that hash never passed CI (no matching release exists). | `anarchyphantoms.admin` | op |
+
+### Debug output
+
+When debug mode is on (`debug.enabled` in config, or toggled live via `/ap debug on`), every governed phantom spawn and every passive/aggressive transition is reported, each line timestamped:
+
+```
+[AP-DEBUG] [14:32:07] phantom spawned at 120, 68, -340 in world_the_end | cause: End-spawner near player Notch | surface: END_STONE (2 blocks below)
+[AP-DEBUG] [14:33:51] phantom turned AGGRESSIVE at 118, 70, -338 | provoked by: player Notch
+[AP-DEBUG] [16:13:51] phantom reverted to PASSIVE at 118, 70, -338 | reason: provocation window expired
+```
+
+- **Console** always sees debug output when debug mode is on, regardless of permissions.
+- **Players** only see it in chat if they hold `anarchyphantoms.debug` — a separate node from `anarchyphantoms.admin`, so debug-spam visibility can be granted per-player without also handing out reload/toggle/update access, and vice versa.
+- Spawn reports cover both allowed and vetoed spawns, and attribute the cause (the triggering player for End-spawner spawns, or the raw `SpawnReason` otherwise) plus which surface block the spawn landed on.
 
 ## Compatibility
 
@@ -152,10 +168,15 @@ src/main/java/com/anarchyphantoms/phantomcontrol/
 ├── AnarchyPhantomsPlugin.java      # Plugin entrypoint, command handling, listener registration
 ├── PluginSettings.java             # Typed, reloadable view over config.yml
 ├── PhantomEndSpawner.java          # Actively spawns phantoms above players in The End (per-player EntityScheduler)
-├── PhantomSpawnListener.java       # Restricts natural spawns to The End + valid surface blocks
-├── PhantomBehaviorListener.java    # Keeps phantoms passive until they take player damage
+├── PhantomSpawnListener.java       # Restricts natural spawns to The End + valid surface blocks; reports spawns for debug
+├── PhantomSpawnCauseTag.java       # Tags a spawned phantom's PDC with a human-readable spawn cause pre-spawn
+├── PhantomBehaviorListener.java    # Keeps phantoms passive until they take player damage; reports aggro transitions
 ├── PhantomProvocationTracker.java  # Per-entity "provoked" state via PersistentDataContainer
-└── PhantomSoundListener.java       # Suppresses ambient phantom sounds until provoked
+├── PhantomSoundListener.java       # Suppresses ambient phantom sounds until provoked
+├── PhantomDebugNotifier.java       # Single dispatcher for debug output (console + anarchyphantoms.debug players)
+├── PluginUpdater.java              # Backs /ap update and /ap rollback: fetches/stages CI-validated builds via GitHub Releases
+├── BuildInfo.java                  # Baked-in version/commit info + repo URL, shown by /ap ver
+└── GitHistory.java                 # Baked-in commit history, shown by /ap git / git info / git history
 ```
 
 ## License
