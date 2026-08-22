@@ -111,19 +111,21 @@ debug:
 
 ## Commands & permissions
 
-All subcommands work under either `/anarchyphantoms` or its shorter alias `/ap`.
+All subcommands work under either `/anarchyphantoms` or its shorter alias `/ap`. **The entire command is operator-only** — every subcommand, including `help` and `ver`, requires `anarchyphantoms.admin`. Non-admins can't run or see any of it; Bukkit rejects the command before it even reaches the plugin (via `permission` on the command in `plugin.yml`), and the same check is repeated in code as a backstop.
 
 | Command | Description | Permission | Default |
 |---|---|---|---|
-| `/ap` or `/ap help` | Lists available subcommands (admin-only ones are only shown to admins), and tells the sender whether they currently hold `anarchyphantoms.debug`. | — | everyone |
-| `/ap ver` (alias `version`) | Shows the running build's version/commit info, plus a clickable link to the GitHub repo. | — | everyone |
-| `/ap git` | Shows the current build's commit, with its full commit message. | — | everyone |
-| `/ap git info <hash>` | Shows full detail for a specific baked-in commit. | — | everyone |
-| `/ap git history [page]` | Lists baked-in commit history, newest first, 8 per page. | — | everyone |
+| `/ap` or `/ap help` | Lists available subcommands, and tells the sender whether they currently hold `anarchyphantoms.debug`. | `anarchyphantoms.admin` | op |
+| `/ap ver` (alias `version`) | Shows the running build's version/commit info, plus a clickable link to the GitHub repo. | `anarchyphantoms.admin` | op |
+| `/ap git` | Shows the current build's commit, with its full commit message. | `anarchyphantoms.admin` | op |
+| `/ap git info <hash>` | Shows full detail for a specific baked-in commit. | `anarchyphantoms.admin` | op |
+| `/ap git history [page]` | Lists baked-in commit history, newest first, 8 per page. | `anarchyphantoms.admin` | op |
 | `/ap reload` | Reloads `config.yml` without a server restart. Note: a live `/ap debug` runtime override (if set) is *not* cleared by this — see below. | `anarchyphantoms.admin` | op |
 | `/ap debug <on\|off>` | Toggles debug logging at runtime, overriding `debug.enabled` in `config.yml` until the next restart or another `/ap debug` call. Running it with no `on`/`off` argument reports the current state. See [Debug output](#debug-output) below for what this reports and to whom. | `anarchyphantoms.admin` | op |
 | `/ap update` | Fetches the latest CI-validated build (the `latest` GitHub release) and stages it into `plugins/update/`. Applied on the **next server restart**, not live. | `anarchyphantoms.admin` | op |
 | `/ap rollback <hash>` | Fetches the CI-validated build for a specific commit (the `git-<hash>` GitHub release) and stages it the same way. Fails cleanly if that hash never passed CI (no matching release exists). | `anarchyphantoms.admin` | op |
+
+`anarchyphantoms.debug` remains a separate, independent permission (default `op`) that only controls whether a player sees debug lines in chat while debug mode is on — it does not grant access to any `/ap` subcommand.
 
 ### Debug output
 
