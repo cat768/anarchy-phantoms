@@ -6,6 +6,11 @@ description: Actively spawns phantoms in The End (endstone/chorus surfaces only)
 author: AnarchyPhantoms
 folia-supported: true
 
+# Plan (player analytics) is entirely optional - AnarchyPhantoms works fine
+# without it. softdepend just means "load Plan first, and let us know it's
+# there if it's present" - it is NOT a hard requirement. See PlanHook.java.
+softdepend: [Plan]
+
 commands:
   anarchyphantoms:
     description: AnarchyPhantoms admin/version commands.

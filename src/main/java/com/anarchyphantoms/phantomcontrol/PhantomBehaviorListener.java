@@ -8,6 +8,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.entity.EntityDeathEvent;
 import org.bukkit.event.entity.EntitySpawnEvent;
 import org.bukkit.event.entity.EntityTargetEvent;
 import org.bukkit.event.entity.EntityTargetLivingEntityEvent;
@@ -31,11 +32,13 @@ public final class PhantomBehaviorListener implements Listener {
     private final AnarchyPhantomsPlugin plugin;
     private final PhantomProvocationTracker tracker;
     private final PhantomDebugNotifier debugNotifier;
+    private final PhantomPlayerStats playerStats;
 
     public PhantomBehaviorListener(AnarchyPhantomsPlugin plugin, PhantomProvocationTracker tracker) {
         this.plugin = plugin;
         this.tracker = tracker;
         this.debugNotifier = plugin.getDebugNotifier();
+        this.playerStats = plugin.getPlayerStats();
     }
 
     /**
@@ -157,11 +160,34 @@ public final class PhantomBehaviorListener implements Listener {
         boolean newlyProvoked = tracker.markProvoked(phantom, phantom.getWorld().getFullTime());
         if (newlyProvoked) {
             debugNotifier.becameAggressive(phantom.getLocation(), "attacked by player " + attacker.getName());
+            // Counted once per phantom (guarded by newlyProvoked, same as
+            // the debug line above) so repeatedly hitting an already-hostile
+            // phantom doesn't inflate this player's Plan-visible total.
+            playerStats.incrementProvoked(attacker);
             // (Re-)arm the expiry recheck now that this phantom has a fresh
             // provocation window to eventually fall out of.
             if (plugin.getSettings().getProvokedDurationTicks() >= 0) {
                 startExpiryRecheckTask(phantom);
             }
+        }
+    }
+
+    /**
+     * Credits a phantom kill to the killing player's Plan-visible stats.
+     * Player#getKiller() already resolves the "did a player kill this"
+     * question the same way vanilla death messages and drop bonuses do
+     * (including via a projectile shot by a player), so no separate
+     * unwrapping logic is needed here the way onPhantomDamaged needs
+     * resolvePlayerAttacker for provocation.
+     */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onPhantomDeath(EntityDeathEvent event) {
+        if (!(event.getEntity() instanceof Phantom)) {
+            return;
+        }
+        Player killer = event.getEntity().getKiller();
+        if (killer != null) {
+            playerStats.incrementKilled(killer);
         }
     }
 
