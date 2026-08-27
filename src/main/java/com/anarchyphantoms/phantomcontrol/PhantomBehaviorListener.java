@@ -31,11 +31,13 @@ public final class PhantomBehaviorListener implements Listener {
     private final AnarchyPhantomsPlugin plugin;
     private final PhantomProvocationTracker tracker;
     private final PhantomDebugNotifier debugNotifier;
+    private final PhantomStatsTracker statsTracker;
 
     public PhantomBehaviorListener(AnarchyPhantomsPlugin plugin, PhantomProvocationTracker tracker) {
         this.plugin = plugin;
         this.tracker = tracker;
         this.debugNotifier = plugin.getDebugNotifier();
+        this.statsTracker = plugin.getStatsTracker();
     }
 
     /**
@@ -157,6 +159,7 @@ public final class PhantomBehaviorListener implements Listener {
         boolean newlyProvoked = tracker.markProvoked(phantom, phantom.getWorld().getFullTime());
         if (newlyProvoked) {
             debugNotifier.becameAggressive(phantom.getLocation(), "attacked by player " + attacker.getName());
+            statsTracker.recordProvocation(attacker);
             // (Re-)arm the expiry recheck now that this phantom has a fresh
             // provocation window to eventually fall out of.
             if (plugin.getSettings().getProvokedDurationTicks() >= 0) {

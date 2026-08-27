@@ -23,6 +23,11 @@
             <id>papermc</id>
             <url>https://repo.papermc.io/repository/maven-public/</url>
         </repository>
+        <!-- Plan Player Analytics API, for the optional PlanHook / AnarchyPhantomsDataExtension integration. -->
+        <repository>
+            <id>jitpack</id>
+            <url>https://jitpack.io</url>
+        </repository>
     </repositories>
 
     <dependencies>
@@ -30,6 +35,21 @@
             <groupId>io.papermc.paper</groupId>
             <artifactId>paper-api</artifactId>
             <version>1.21.9-R0.1-SNAPSHOT</version>
+            <scope>provided</scope>
+        </dependency>
+        <!--
+          Plan API - compile-time only (scope=provided means it's NOT bundled
+          into the shaded/output jar and is expected to be supplied by the
+          server's own Plan installation at runtime). See PlanHook.java for
+          why every usage of these classes is isolated to one file, and
+          plugin.yml's softdepend for the runtime-optional loading contract
+          this dependency scope corresponds to.
+        -->
+        <dependency>
+            <groupId>com.github.plan-player-analytics</groupId>
+            <artifactId>Plan</artifactId>
+            <!-- Check https://github.com/plan-player-analytics/Plan/releases for the latest build number before bumping. -->
+            <version>5.8.3605</version>
             <scope>provided</scope>
         </dependency>
     </dependencies>

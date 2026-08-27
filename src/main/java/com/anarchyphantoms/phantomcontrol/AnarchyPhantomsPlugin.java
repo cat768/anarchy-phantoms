@@ -26,6 +26,7 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
     private PhantomProvocationTracker provocationTracker;
     private PhantomDebugNotifier debugNotifier;
     private PhantomSpawnCauseTag spawnCauseTag;
+    private PhantomStatsTracker statsTracker;
     private BuildInfo buildInfo;
     private GitHistory gitHistory;
     private PluginUpdater pluginUpdater;
@@ -38,6 +39,7 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
         this.provocationTracker = new PhantomProvocationTracker(this);
         this.debugNotifier = new PhantomDebugNotifier(this);
         this.spawnCauseTag = new PhantomSpawnCauseTag(this);
+        this.statsTracker = new PhantomStatsTracker();
         this.buildInfo = new BuildInfo(this);
         this.gitHistory = new GitHistory(this);
         this.pluginUpdater = new PluginUpdater(this);
@@ -58,6 +60,19 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
         // task started explicitly here too.
         for (Player player : getServer().getOnlinePlayers()) {
             endSpawner.startTaskForExisting(player);
+        }
+
+        // Plan is an optional soft-dependency (see plugin.yml). This must be
+        // called from a try/catch here, not just inside PlanHook, because
+        // NoClassDefFoundError is thrown by the JVM at the call site the
+        // moment it tries to load PlanHook itself if Plan's classes are
+        // referenced anywhere reachable without being isolated - guarding
+        // the construction call is what actually protects onEnable from
+        // ever failing when Plan isn't installed.
+        try {
+            new PlanHook(this, statsTracker).hookIntoPlan();
+        } catch (NoClassDefFoundError planIsNotInstalled) {
+            getLogger().info("Plan Player Analytics not found - skipping Plan integration (this is optional and not an error).");
         }
 
         getLogger().info("AnarchyPhantoms phantom control enabled: End-only spawns, endstone/chorus surface required, passive until attacked.");
@@ -307,6 +322,10 @@ public final class AnarchyPhantomsPlugin extends JavaPlugin {
 
     public PhantomSpawnCauseTag getSpawnCauseTag() {
         return spawnCauseTag;
+    }
+
+    public PhantomStatsTracker getStatsTracker() {
+        return statsTracker;
     }
 
     public BuildInfo getBuildInfo() {

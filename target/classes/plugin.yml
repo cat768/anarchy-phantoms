@@ -6,11 +6,18 @@ description: Actively spawns phantoms in The End (endstone/chorus surfaces only)
 author: AnarchyPhantoms
 folia-supported: true
 
+# Optional integration: if Plan Player Analytics is installed, AnarchyPhantoms
+# reports spawn/provocation stats to it (see PlanHook.java). Soft-depend only -
+# this plugin works identically with or without Plan present.
+softdepend: [Plan]
+
 commands:
   anarchyphantoms:
     description: AnarchyPhantoms admin/version commands.
-    usage: /anarchyphantoms help | ver | git [info <hash>|history [page]] | reload | debug <on|off> | update | rollback <hash>
+    usage: /anarchyphantoms help | ver | git [info <hash>|history [page]] | reload | debug <on|off>
     aliases: [ap]
+    permission: anarchyphantoms.admin
+    permission-message: You do not have permission to do that.
 
 permissions:
   anarchyphantoms.admin:

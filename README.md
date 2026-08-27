@@ -141,6 +141,29 @@ When debug mode is on (`debug.enabled` in config, or toggled live via `/ap debug
 - **Players** only see it in chat if they hold `anarchyphantoms.debug` — a separate node from `anarchyphantoms.admin`, so debug-spam visibility can be granted per-player without also handing out reload/toggle/update access, and vice versa.
 - Spawn reports cover both allowed and vetoed spawns, and attribute the cause (the triggering player for End-spawner spawns, or the raw `SpawnReason` otherwise) plus which surface block the spawn landed on.
 
+## Plan Player Analytics integration
+
+If [Plan Player Analytics](https://github.com/plan-player-analytics/Plan) is installed on the same server, AnarchyPhantoms automatically reports activity stats to it via Plan's DataExtension API - no configuration needed. Plan is a **soft-dependency only**: AnarchyPhantoms works identically with or without it installed.
+
+Reported on each player's Plan page:
+
+| Stat | Description |
+|---|---|
+| Phantoms Spawned Nearby | Lifetime count of phantoms actively spawned near this player by the End-spawner |
+| Phantoms Provoked | How many phantoms this player has provoked (first hit only) |
+| Phantoms Active Nearby | Phantoms currently within spawn-check radius, as of the last check cycle |
+| Has Provoked a Phantom | Yes/No |
+
+Reported on Plan's server overview page:
+
+| Stat | Description |
+|---|---|
+| Total Phantoms Spawned | Server-wide lifetime count of End-spawner spawns |
+| Total Provocations | Server-wide lifetime count of provocations |
+| End-Spawner Success Rate | Share of spawn attempts that resulted in a live phantom (vs. vetoed by the surface/dimension checks) |
+
+These are in-memory counters (see `PhantomStatsTracker`), so they reset on server restart - they're meant to reflect ongoing activity, not a permanent historical log.
+
 ## Compatibility
 
 - `pom.xml` compiles against `paper-api` version `1.21.9-R0.1-SNAPSHOT`.
@@ -176,6 +199,9 @@ src/main/java/com/anarchyphantoms/phantomcontrol/
 ├── PhantomProvocationTracker.java  # Per-entity "provoked" state via PersistentDataContainer
 ├── PhantomSoundListener.java       # Suppresses ambient phantom sounds until provoked
 ├── PhantomDebugNotifier.java       # Single dispatcher for debug output (console + anarchyphantoms.debug players)
+├── PhantomStatsTracker.java        # In-memory spawn/provocation counters, fed to Plan (see below)
+├── PlanHook.java                   # Isolated Plan Player Analytics API access (optional soft-dependency)
+├── AnarchyPhantomsDataExtension.java # Plan DataExtension: exposes PhantomStatsTracker's counters to Plan's web panel
 ├── PluginUpdater.java              # Backs /ap update and /ap rollback: fetches/stages CI-validated builds via GitHub Releases
 ├── BuildInfo.java                  # Baked-in version/commit info + repo URL, shown by /ap ver
 └── GitHistory.java                 # Baked-in commit history, shown by /ap git / git info / git history

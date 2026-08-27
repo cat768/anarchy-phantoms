@@ -77,6 +77,7 @@ public final class PhantomEndSpawner implements Listener {
     private final AnarchyPhantomsPlugin plugin;
     private final PhantomDebugNotifier debugNotifier;
     private final PhantomSpawnCauseTag spawnCauseTag;
+    private final PhantomStatsTracker statsTracker;
     private final Random random = new Random();
 
     /**
@@ -91,6 +92,7 @@ public final class PhantomEndSpawner implements Listener {
         this.plugin = plugin;
         this.debugNotifier = plugin.getDebugNotifier();
         this.spawnCauseTag = plugin.getSpawnCauseTag();
+        this.statsTracker = plugin.getStatsTracker();
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -196,6 +198,10 @@ public final class PhantomEndSpawner implements Listener {
         }
 
         int nearby = countNearbyPhantoms(player, settings.getSpawnCheckRadius());
+        // Piggybacks on the cap check's own count rather than performing a
+        // second nearby-entity scan solely for stats reporting - see
+        // PhantomStatsTracker#reportActiveNearby.
+        statsTracker.reportActiveNearby(player, nearby);
         if (nearby >= settings.getMaxPhantomsPerPlayer()) {
             debugNotifier.debug(player, "at phantom cap (" + nearby + "/" + settings.getMaxPhantomsPerPlayer() + " within " + settings.getSpawnCheckRadius() + " blocks)");
             return;
@@ -239,11 +245,13 @@ public final class PhantomEndSpawner implements Listener {
             // to a race between our pickSpawnLocation and the world since),
             // or something else removed it immediately. Nothing further to do.
             debugNotifier.debug(player, "world.spawn() call was vetoed (likely by PhantomSpawnListener or another plugin)");
+            statsTracker.recordEndSpawnerVetoed();
             return;
         }
         // Successful-spawn debug reporting already happened inside
         // PhantomSpawnListener.onCreatureSpawn (same call stack, via the
         // spawn-cause tag set above) - nothing further to report here.
+        statsTracker.recordEndSpawnerSuccess(player);
     }
 
     /**
