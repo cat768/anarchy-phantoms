@@ -23,12 +23,6 @@
             <id>papermc</id>
             <url>https://repo.papermc.io/repository/maven-public/</url>
         </repository>
-        <!-- Plan (player analytics) API is distributed via JitPack; see
-             https://github.com/plan-player-analytics/Plan/wiki/DataExtension-API---Getting-started -->
-        <repository>
-            <id>jitpack</id>
-            <url>https://jitpack.io</url>
-        </repository>
     </repositories>
 
     <dependencies>
@@ -36,29 +30,6 @@
             <groupId>io.papermc.paper</groupId>
             <artifactId>paper-api</artifactId>
             <version>1.21.9-R0.1-SNAPSHOT</version>
-            <scope>provided</scope>
-        </dependency>
-        <!--
-          Optional integration: lets AnarchyPhantoms register a DataExtension
-          with Plan (https://github.com/plan-player-analytics/Plan) so
-          per-player phantom stats show up on Plan's player pages and
-          "Plugins" overview, IF the server has Plan installed and enabled.
-          scope=provided because Plan is a soft-dependency (see plugin.yml) -
-          it must be present on the server's classpath at runtime for the
-          integration to activate, but this plugin must build and run fine
-          without it. All Plan-API imports are confined to PlanHook and
-          AnarchyPhantomsDataExtension (see their javadocs) so a server
-          without Plan installed never triggers a NoClassDefFoundError.
-
-          IMPORTANT: check https://github.com/plan-player-analytics/Plan/tags
-          (or https://jitpack.io/#plan-player-analytics/Plan) for the actual
-          latest tag and put it below - this placeholder is only a recent
-          example and WILL go stale. Any 5.7.x tag from that page works.
-        -->
-        <dependency>
-            <groupId>com.github.plan-player-analytics</groupId>
-            <artifactId>Plan</artifactId>
-            <version>5.7.3295</version>
             <scope>provided</scope>
         </dependency>
     </dependencies>
