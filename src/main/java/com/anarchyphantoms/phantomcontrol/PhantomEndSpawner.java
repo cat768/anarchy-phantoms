@@ -211,6 +211,11 @@ public final class PhantomEndSpawner implements Listener {
         Location spawnLocation = pickSpawnLocation(player, settings);
         if (spawnLocation == null) {
             debugNotifier.debug(player, "pickSpawnLocation returned null (no allowed surface block found in the sampled column)");
+            // Persisted (counter + always-on log line) independently of
+            // debug mode - see PhantomStatsTracker#recordLocationPickMiss
+            // for why this gets its own tracking rather than folding into
+            // recordEndSpawnerVetoed().
+            statsTracker.recordLocationPickMiss(player);
             return;
         }
         debugNotifier.debug(player, "valid location found at " + spawnLocation.getBlockX() + "," + spawnLocation.getBlockY() + "," + spawnLocation.getBlockZ() + ", spawning phantom");
