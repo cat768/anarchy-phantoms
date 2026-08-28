@@ -255,6 +255,20 @@ public final class PhantomEndSpawner implements Listener {
     }
 
     /**
+     * Number of randomly-offset columns to sample per spawn attempt before
+     * giving up. A single sample is fine when the player has open ground on
+     * all sides, but on a 1-wide bridge (or any thin structure) over the
+     * void, the overwhelming majority of columns within horizontalSpread
+     * are void with no highest block at all, so a lone sample almost always
+     * misses and pickSpawnLocation returns null on nearly every attempt.
+     * Retrying several independent columns in the same call - rather than
+     * waiting for the next CHECK_INTERVAL_TICKS tick to try again - makes
+     * the odds of finding the (thin) allowed surface within horizontalSpread
+     * reasonable without changing the spawn chance/rate semantics at all.
+     */
+    private static final int LOCATION_SAMPLE_ATTEMPTS = 12;
+
+    /**
      * Picks a location above an actual, known allowed surface near the
      * player, biased upward like vanilla phantom spawns.
      *
@@ -272,7 +286,9 @@ public final class PhantomEndSpawner implements Listener {
      * Instead we find the real ground height under a randomly offset column
      * near the player first (World#getHighestBlockYAt), confirm that block
      * is an allowed surface, and only then place the phantom above that
-     * known-good point.
+     * known-good point. Because most columns within horizontalSpread can be
+     * void (e.g. a 1-wide bridge), we sample up to LOCATION_SAMPLE_ATTEMPTS
+     * independent columns before giving up for this call.
      */
     private Location pickSpawnLocation(Player player, PluginSettings settings) {
         Location base = player.getLocation();
@@ -285,20 +301,24 @@ public final class PhantomEndSpawner implements Listener {
         int horizontalSpread = 20;
         int minHeightAbove = 20;
 
-        int dx = rnd.nextInt(-horizontalSpread, horizontalSpread + 1);
-        int dz = rnd.nextInt(-horizontalSpread, horizontalSpread + 1);
-        int x = base.getBlockX() + dx;
-        int z = base.getBlockZ() + dz;
+        for (int attempt = 0; attempt < LOCATION_SAMPLE_ATTEMPTS; attempt++) {
+            int dx = rnd.nextInt(-horizontalSpread, horizontalSpread + 1);
+            int dz = rnd.nextInt(-horizontalSpread, horizontalSpread + 1);
+            int x = base.getBlockX() + dx;
+            int z = base.getBlockZ() + dz;
 
-        Integer groundY = findAllowedSurfaceY(world, x, z, settings);
-        if (groundY == null) {
-            return null;
+            Integer groundY = findAllowedSurfaceY(world, x, z, settings);
+            if (groundY == null) {
+                continue; // this column was void/disallowed - try another
+            }
+
+            int dy = rnd.nextInt(minHeightAbove, MAX_HEIGHT_ABOVE_GROUND + 1);
+            int spawnY = Math.min(groundY + dy, world.getMaxHeight() - 1);
+
+            return new Location(world, x + 0.5, spawnY, z + 0.5);
         }
 
-        int dy = rnd.nextInt(minHeightAbove, MAX_HEIGHT_ABOVE_GROUND + 1);
-        int spawnY = Math.min(groundY + dy, world.getMaxHeight() - 1);
-
-        return new Location(world, x + 0.5, spawnY, z + 0.5);
+        return null; // no allowed surface found in any sampled column
     }
 
     /**
