@@ -20,7 +20,7 @@ import org.bukkit.plugin.java.JavaPlugin;
  * passive (non-targeting, silent) until a player actually attacks one,
  * at which point that specific phantom becomes hostile and vocal.
  */
-public final class AnarchyPhantomsPlugin extends JavaPlugin {
+public class AnarchyPhantomsPlugin extends JavaPlugin {
 
     private PluginSettings settings;
     private PhantomProvocationTracker provocationTracker;

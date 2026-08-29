@@ -108,6 +108,16 @@
                 <version>3.13.0</version>
                 <configuration>
                     <release>21</release>
+                    <!--
+                      This project has no annotation processors of its own,
+                      but one is occasionally pulled onto the compile
+                      classpath transitively. Without -proc:none, javac
+                      auto-enables processing and prints an unactionable
+                      "annotation processing enabled" INFO notice on every
+                      build. -proc:none makes the (currently no-op) behavior
+                      explicit and silences the notice.
+                    -->
+                    <proc>none</proc>
                 </configuration>
             </plugin>
             <!--
