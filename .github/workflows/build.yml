@@ -43,6 +43,7 @@ jobs:
     outputs:
       short_sha: ${{ steps.sha.outputs.short }}
       jar_name: ${{ steps.jar.outputs.name }}
+      jar_sha256: ${{ steps.digest.outputs.sha256 }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -82,13 +83,36 @@ jobs:
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "path=target/$name" >> "$GITHUB_OUTPUT"
 
+      # Digest is computed here, immediately after the jar exists and BEFORE
+      # any smoke-test leg touches it, so the hash always describes exactly
+      # the bytes that get smoke-tested and (if every leg passes) published.
+      # The plugin's own updater (PluginUpdater#downloadVerifyAndStage)
+      # downloads this .sha256 file alongside the jar and refuses to stage
+      # anything whose recomputed digest doesn't match - this is the actual
+      # integrity check; "only CI-passed commits have a release to find"
+      # alone is not one, since it says nothing about whether the downloaded
+      # bytes are intact or genuine.
+      - name: Compute jar digest
+        id: digest
+        run: |
+          set -euo pipefail
+          sum="$(sha256sum "${{ steps.jar.outputs.path }}" | awk '{print $1}')"
+          echo "$sum" > "${{ steps.jar.outputs.path }}.sha256"
+          echo "path=${{ steps.jar.outputs.path }}.sha256" >> "$GITHUB_OUTPUT"
+          echo "sha256=$sum" >> "$GITHUB_OUTPUT"
+          echo "Digest: $sum"
+
       # Uploaded once here; every smoke-test matrix leg downloads this same
-      # artifact rather than each rebuilding it themselves.
+      # artifact rather than each rebuilding it themselves. The digest file
+      # travels with it so smoke-test legs could (if ever needed) verify
+      # they're booting the exact bytes `build` produced.
       - name: Upload jar artifact
         uses: actions/upload-artifact@v7
         with:
           name: jar-${{ steps.sha.outputs.short }}
-          path: ${{ steps.jar.outputs.path }}
+          path: |
+            ${{ steps.jar.outputs.path }}
+            ${{ steps.digest.outputs.path }}
           if-no-files-found: error
 
   # ---------------------------------------------------------------------
@@ -201,8 +225,14 @@ jobs:
         run: |
           set -euo pipefail
           cp "dist/${{ needs.build.outputs.jar_name }}" "dist/anarchy-phantoms-latest.jar"
+          cp "dist/${{ needs.build.outputs.jar_name }}.sha256" "dist/anarchy-phantoms-latest.jar.sha256"
           echo "path=dist/anarchy-phantoms-latest.jar" >> "$GITHUB_OUTPUT"
+          echo "digest_path=dist/anarchy-phantoms-latest.jar.sha256" >> "$GITHUB_OUTPUT"
 
+      # Both the jar and its .sha256 digest are attached to every release.
+      # PluginUpdater requires the digest asset to be present and to verify
+      # before it will stage anything - a release with a jar but no matching
+      # digest is treated as untrustworthy, same as a checksum mismatch.
       - name: Publish per-commit release
         uses: softprops/action-gh-release@v3
         with:
@@ -214,9 +244,12 @@ jobs:
             Smoke-tested against Paper and Folia, all supported versions >= ${{ env.MIN_MC_VERSION }}
             (Paper 1.21.9 included via its pinned ALPHA build - Paper never shipped a STABLE
             build for that version).
+            SHA-256: `${{ needs.build.outputs.jar_sha256 }}`
           prerelease: true
           make_latest: false
-          files: dist/${{ needs.build.outputs.jar_name }}
+          files: |
+            dist/${{ needs.build.outputs.jar_name }}
+            dist/${{ needs.build.outputs.jar_name }}.sha256
 
       - name: Publish to "latest" release
         uses: softprops/action-gh-release@v3
@@ -228,6 +261,9 @@ jobs:
             This tag/release is overwritten on every push to `main` - only
             the newest jar is kept here. For older builds, see the
             per-commit `git-<sha>` releases.
+            SHA-256: `${{ needs.build.outputs.jar_sha256 }}`
           prerelease: true
           make_latest: false
-          files: ${{ steps.latest.outputs.path }}
+          files: |
+            ${{ steps.latest.outputs.path }}
+            ${{ steps.latest.outputs.digest_path }}
