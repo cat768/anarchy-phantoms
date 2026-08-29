@@ -35,7 +35,7 @@
           in lockstep with paper-api's major/minor above - see
           https://docs.mockbukkit.org for the current mapping table.
         -->
-        <mockbukkit.version>4.16.0</mockbukkit.version>
+        <mockbukkit.version>4.108.0</mockbukkit.version>
         <junit.version>5.11.4</junit.version>
     </properties>
 

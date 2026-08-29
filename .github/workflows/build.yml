@@ -40,6 +40,8 @@ env:
 
 permissions:
   contents: write # needed to publish/update the "latest" release below
+  checks: write    # needed by mikepenz/action-junit-report to create check runs
+  pull-requests: write # needed by mikepenz/action-junit-report to annotate PRs
 
 jobs:
   # ---------------------------------------------------------------------
