@@ -84,7 +84,7 @@ jobs:
       # so pass/fail per-test is visible in the PR UI, not just buried in
       # raw log output.
       - name: Publish test results
-        uses: mikepenz/action-junit-report@v4
+        uses: mikepenz/action-junit-report@v6
         if: always()
         with:
           report_paths: 'target/surefire-reports/TEST-*.xml'
