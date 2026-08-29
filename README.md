@@ -28,11 +28,13 @@ All of the above is configurable — see [Configuration](#configuration).
 
 ## Installation
 
-1. Download a jar from [Releases](../../releases) (or build it yourself — see below):
-   - **`anarchy-phantoms-latest.jar`** (tag `latest`) — always the most recent build off `main`, overwritten on every push. Good for staying current.
-   - **`anarchy-phantoms-git-<sha>.jar`** — an immutable, permanent release for one specific commit. Good for pinning a version.
-   
-   Every release is only published after it passes CI smoke tests booting a real server (see [Compatibility](#compatibility)), so anything in Releases is known to enable cleanly.
+1. **[⬇ Download the latest jar](../../releases/latest/download/anarchy-phantoms-latest.jar)** — always the most recent build off `main`, overwritten on every push. That link always points at the current `latest` release, no clicking through [Releases](../../releases) required.
+
+   Need something else instead?
+   - **Pin a specific commit:** grab `anarchy-phantoms-git-<sha>.jar` from that commit's [permanent release](../../releases) — immutable, never overwritten.
+   - **Build it yourself:** see [Building from source](#building-from-source) below.
+
+   Every release is only published after it passes CI smoke tests booting a real server (see [Compatibility](#compatibility)), so anything published here is known to enable cleanly.
 2. Drop it into your server's `plugins/` folder.
 3. Start/restart the server. A default `config.yml` will be generated under `plugins/AnarchyPhantoms/`.
 4. Adjust `config.yml` to taste, then run `/anarchyphantoms reload` (or `/ap reload`) to apply changes without a restart.

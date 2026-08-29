@@ -348,19 +348,29 @@ jobs:
             done
           fi
 
+      # This is the release a first-time visitor should land on: marked as
+      # a real (non-pre) release and pinned as GitHub's "Latest" via
+      # make_latest, so it gets the green "Latest" badge and sorts to the
+      # top of /releases instead of getting lost among the per-commit
+      # git-<sha> prereleases below it. Those per-commit releases remain
+      # prerelease:true / make_latest:false on purpose - they're pinning/
+      # rollback targets for /ap rollback, not something a newcomer should
+      # be steered toward.
       - name: Publish to "latest" release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: latest
           name: Latest build (${{ needs.build.outputs.short_sha }})
           body: |
+            **This is the recommended download - grab `anarchy-phantoms-latest.jar` below.**
+
             Automated build from commit ${{ github.sha }}.
             This tag/release is overwritten on every push to `main` - only
             the newest jar is kept here. For older builds, see the
             per-commit `git-<sha>` releases.
             SHA-256: `${{ needs.build.outputs.jar_sha256 }}`
-          prerelease: true
-          make_latest: false
+          prerelease: false
+          make_latest: true
           files: |
             ${{ steps.latest.outputs.path }}
             ${{ steps.latest.outputs.digest_path }}
