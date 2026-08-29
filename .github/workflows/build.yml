@@ -1,9 +1,14 @@
 name: Build
 
-# Compiles the jar once, then smoke-tests it against every supported
-# Paper AND Folia version (>= MIN_MC_VERSION) that currently has a STABLE
-# build, discovered at runtime from PaperMC's Fill API. Publishing only
-# happens if every leg of the smoke-test matrix passes.
+# Runs a fast MockBukkit/JUnit behavioral test suite first (unit-test),
+# gating everything else. On push to main / workflow_dispatch, it then
+# compiles the jar once and smoke-tests it against every supported Paper
+# AND Folia version (>= MIN_MC_VERSION) that currently has a STABLE build,
+# discovered at runtime from PaperMC's Fill API. Publishing only happens if
+# every leg of the smoke-test matrix passes. On a pull_request, only
+# unit-test runs (see the `if:` on every other job) - PRs get fast
+# behavioral feedback without spending CI time on the full boot-matrix or
+# attempting to cut a release from an unmerged head.
 #
 # Paper 1.21.9 is additionally pinned (always included in the Paper leg,
 # independent of Fill discovery) since it's this plugin's actual production
@@ -15,7 +20,16 @@ name: Build
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch: {}
+
+# On a pull_request event, only the fast `unit-test` job runs (see each
+# job's own `if:` condition below) - the compile/boot-matrix/publish
+# pipeline stays push-to-main/workflow_dispatch only, exactly as before.
+# This keeps PR feedback fast (behavioral tests only, ~1 minute) without
+# spending CI minutes booting real servers or attempting to cut a release
+# from an unmerged PR head on every push to a branch.
 
 env:
   # Floor for the smoke-test matrix. Only this version and newer are
@@ -29,6 +43,61 @@ permissions:
 
 jobs:
   # ---------------------------------------------------------------------
+  # 0. Fast behavioral unit tests (MockBukkit + JUnit 5). Runs BEFORE the
+  #    compile-and-boot pipeline below and gates it: `build` now depends on
+  #    this job passing first. This is deliberately the fastest job in the
+  #    whole workflow (no server download, no world boot, no Fill API
+  #    calls) so a broken phantom-behavior rule (spawn veto, provocation,
+  #    silence) fails in ~1 minute instead of only being caught - or, as
+  #    was previously the case, NOT caught at all - by the boot-only smoke
+  #    tests further down, which only ever proved the jar loads without
+  #    crashing.
+  #
+  #    Runs on every push to main AND every PR into main (see `on:` above),
+  #    unlike the boot-matrix which only runs on push/dispatch - so a PR
+  #    gets fast feedback on behavior correctness without needing to spin
+  #    up the full Paper/Folia matrix.
+  # ---------------------------------------------------------------------
+  unit-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # Runs src/test/java (MockBukkit-based behavioral tests) without
+      # packaging the jar or running the git-info/git-history generator
+      # plugins - `test` is an earlier lifecycle phase than `package`, and
+      # none of the assertions here depend on the final jar's contents.
+      - name: Run unit tests
+        run: mvn -B test
+
+      # Surefire's XML reports, published as a real GitHub Checks summary
+      # so pass/fail per-test is visible in the PR UI, not just buried in
+      # raw log output.
+      - name: Publish test results
+        uses: mikepenz/action-junit-report@v4
+        if: always()
+        with:
+          report_paths: 'target/surefire-reports/TEST-*.xml'
+          require_tests: true
+          fail_on_failure: true
+
+      - name: Upload surefire reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: surefire-reports
+          path: target/surefire-reports/
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------
   # 1. Compile once. No server-type/version axis here at all: the plugin
   #    is compiled against paper-api only (see pom.xml) and relies on
   #    Paper/Folia API compatibility + `folia-supported: true` in
@@ -39,6 +108,8 @@ jobs:
   #    build variant would need to be added.
   # ---------------------------------------------------------------------
   build:
+    needs: [unit-test]
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     outputs:
       short_sha: ${{ steps.sha.outputs.short }}
@@ -127,6 +198,7 @@ jobs:
   #    job's logs.
   # ---------------------------------------------------------------------
   generate-matrix:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
@@ -156,6 +228,7 @@ jobs:
   # ---------------------------------------------------------------------
   smoke-test:
     needs: [build, generate-matrix]
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -212,6 +285,7 @@ jobs:
   # ---------------------------------------------------------------------
   publish:
     needs: [build, smoke-test]
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Download jar artifact

@@ -12,12 +12,6 @@
     <name>anarchy-phantoms</name>
     <description>Custom Phantom behavior: End-only spawning, endstone/chorus surface requirement, passive until attacked, silent screech until provoked.</description>
 
-    <properties>
-        <maven.compiler.source>21</maven.compiler.source>
-        <maven.compiler.target>21</maven.compiler.target>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    </properties>
-
     <repositories>
         <repository>
             <id>papermc</id>
@@ -29,6 +23,21 @@
             <url>https://jitpack.io</url>
         </repository>
     </repositories>
+
+    <properties>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!--
+          Centralized so CI and local `mvn test` always agree on which
+          MockBukkit line is in use. MockBukkit's artifact is versioned
+          per-Minecraft-major (mockbukkit-v1.21), so this must be bumped
+          in lockstep with paper-api's major/minor above - see
+          https://docs.mockbukkit.org for the current mapping table.
+        -->
+        <mockbukkit.version>4.16.0</mockbukkit.version>
+        <junit.version>5.11.4</junit.version>
+    </properties>
 
     <dependencies>
         <dependency>
@@ -52,6 +61,41 @@
             <version>5.8.3605</version>
             <scope>provided</scope>
         </dependency>
+
+        <!--
+          ================= TEST-ONLY DEPENDENCIES =================
+          None of these are bundled into the shipped jar (scope=test).
+          See src/test/java for what they're actually used for.
+        -->
+
+        <!-- JUnit 5: test engine + assertions. -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+          MockBukkit: spins up a real (in-memory, no networking/rendering)
+          mock Bukkit/Paper server so tests can fire actual Bukkit events
+          (CreatureSpawnEvent, EntityDamageByEntityEvent, etc.), spawn real
+          mock entities, and assert on the resulting server/entity state -
+          e.g. "was this CreatureSpawnEvent actually cancelled", not just
+          "did the plugin jar load". This is what closes the gap this PR
+          is about: the existing CI smoke-tests only prove the plugin
+          enables without crashing; these tests prove the phantom
+          spawn/aggro/silence RULES behave correctly.
+
+          Versioned per-Minecraft-major (mockbukkit-v1.21) - bump alongside
+          paper-api's version above, not independently.
+        -->
+        <dependency>
+            <groupId>org.mockbukkit.mockbukkit</groupId>
+            <artifactId>mockbukkit-v1.21</artifactId>
+            <version>${mockbukkit.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -64,6 +108,24 @@
                 <version>3.13.0</version>
                 <configuration>
                     <release>21</release>
+                </configuration>
+            </plugin>
+            <!--
+              Runs src/test/java against JUnit 5 (jupiter engine). These are
+              plain `mvn test` unit/behavioral tests - separate from, and
+              much faster than, the boot-a-real-server smoke tests in CI.
+              defaultGoal above is "clean package", which itself runs the
+              "test" phase first, so these already execute on every
+              `mvn package` - this configuration just pins the surefire
+              version and enables the JUnit 5 provider explicitly.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.5.2</version>
+                <configuration>
+                    <trimStackTrace>false</trimStackTrace>
+                    <useModulePath>false</useModulePath>
                 </configuration>
             </plugin>
             <plugin>
