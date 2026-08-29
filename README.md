@@ -21,7 +21,7 @@ All of the above is configurable — see [Configuration](#configuration).
 | | |
 |---|---|
 | **Server software** | [Paper](https://papermc.io/) or [Folia](https://papermc.io/software/folia) |
-| **Minecraft version** | 1.21.9+ (built/CI-tested on 1.21.9, `api-version: '1.21'` keeps it working on newer 1.21.x builds too; see [Compatibility](#compatibility)) |
+| **Minecraft version** | 1.21.9+ (compiled against `paper-api` 1.21.11, `api-version: '1.21'` keeps it working across the whole 1.21.x line; see [Compatibility](#compatibility)) |
 | **Java** | 21+ |
 
 > Spigot/Bukkit (non-Paper) are **not officially supported** — the plugin is built against the Paper API and ships with `folia-supported: true`, so it's tested only on Paper/Folia.
@@ -46,6 +46,23 @@ mvn clean package
 ```
 
 The built jar will be in `target/anarchy-phantoms-<version>.jar`.
+
+## Testing
+
+```bash
+mvn test
+```
+
+A [MockBukkit](https://docs.mockbukkit.org) + JUnit 5 behavioral suite (34 tests across 6 classes, `src/test/java/`) fires real Bukkit events through the plugin's actual registered listeners and asserts on the resulting entity/event state, rather than just checking that the plugin boots. It covers:
+
+- **Spawn gating** (`PhantomSpawnListenerTest`) — overworld spawns vetoed, End spawns allowed only above a valid surface, void/no-surface spawns vetoed, spawn eggs/commands left ungoverned, non-phantom entities ignored.
+- **Passive-until-attacked behavior** (`PhantomBehaviorListenerTest`) — unprovoked phantoms can't target players, provoked ones can, non-player damage doesn't provoke, provocation is per-entity.
+- **Silent-until-provoked sounds** (`PhantomSoundListenerTest`) — silent on spawn, un-silenced on provocation.
+- **Provocation state** (`PhantomProvocationTrackerTest`) — the PDC-backed provoked/provoked-at-tick flag in isolation.
+- **Config edge cases** (`PluginSettingsTest`) — `surface-check-depth` and `spawn-chance` clamping, unknown-material handling, debug runtime-override precedence.
+- **Active End spawning** (`PhantomEndSpawnerTest`) — spawns occur/don't occur per `spawn-chance` and `end-spawning.enabled`, the per-player cap is respected, spawning stops once a player leaves The End.
+
+This suite is wired into CI as the `unit-test` job and gates the rest of the pipeline — see [CI pipeline](#ci-pipeline).
 
 ## Configuration
 
@@ -168,16 +185,18 @@ These are in-memory counters (see `PhantomStatsTracker`), so they reset on serve
 
 ## Compatibility
 
-- `pom.xml` compiles against `paper-api` version `1.21.9-R0.1-SNAPSHOT`.
+- `pom.xml` compiles against `paper-api` version `1.21.11-R0.1-SNAPSHOT`.
 - `plugin.yml` declares `api-version: '1.21'` — Paper's `api-version` field is only ever major.minor granularity, and Paper treats this as "compatible with any 1.21.x server." That's what lets a jar built against 1.21.9 load and run unmodified on newer 1.21.x releases as well, without needing a rebuild for every patch version.
 - **Folia support**: `folia-supported: true` is set in `plugin.yml`. The plugin uses standard Bukkit event listeners, per-entity persistent data, and per-player `EntityScheduler` tasks (no global schedulers, no cross-region state), so it runs correctly under Folia's regionized threading model as well as on standard Paper.
 - Starting in 2026, Mojang moved to year.drop versioning (e.g. `26.1`, `26.2`, ...) instead of `1.x`, and Paper follows the same scheme for Java Edition builds going forward (1.21.11 was the last `1.x`-style release; see [Paper's project setup docs](https://docs.papermc.io/paper/dev/project-setup/)). Bedrock version numbers (e.g. `26.40`) are a **separate** numbering track and don't correspond 1:1 with Java/Paper releases — don't match them up when picking a Paper API version.
 
 ### CI pipeline
 
-CI is no longer a single fixed-version smoke test — `.github/workflows/build.yml` builds the jar once, then dynamically discovers every currently-STABLE Paper **and** Folia version (from PaperMC's Fill API) at or above `MIN_MC_VERSION` (currently `1.21.9`) and boots the same jar against every one of them in parallel. Paper 1.21.9 itself is separately pinned into the matrix even though it never had a STABLE Fill build (it's ALPHA-only, superseded same cycle by 1.21.10), since it's the plugin's actual production target.
+CI runs in two stages. A `unit-test` job runs first and gates everything else: it runs the MockBukkit/JUnit behavioral suite (see [Testing](#testing)) via `mvn -B test`, publishes results as a GitHub Checks summary, and must pass before the compile/boot pipeline is even attempted. `unit-test` is also the only job that runs on pull requests — the boot-matrix and publish steps stay push-to-`main`/`workflow_dispatch`-only, so a PR gets fast behavioral feedback (~1 minute) without spinning up real servers or attempting to cut a release from an unmerged head.
 
-- Publishing (to both the rolling `latest` release and a permanent `git-<sha>` release) only happens if **every** leg of that matrix passes.
+Once `unit-test` passes, `.github/workflows/build.yml` builds the jar once, then dynamically discovers every currently-STABLE Paper **and** Folia version (from PaperMC's Fill API) at or above `MIN_MC_VERSION` (currently `1.21.9`) and boots the same jar against every one of them in parallel. Paper 1.21.9 itself is separately pinned into the matrix even though it never had a STABLE Fill build (it's ALPHA-only, superseded same cycle by 1.21.10), since it's the plugin's actual production target.
+
+- Publishing (to both the rolling `latest` release and a permanent `git-<sha>` release) only happens if `unit-test` **and every** smoke-test matrix leg pass.
 - `.github/workflows/latest-drift-check.yml` is a safety net that fires after each `build.yml` run: it compares commit timestamps between `main` and whatever the `latest` tag currently points to, and re-dispatches `build.yml` if `latest` ever falls behind (e.g. a publish step silently no-op'd). It never republishes directly itself — it just re-triggers the real pipeline.
 - Matrix generation and server boot logic live in `.github/workflows/scripts/generate-matrix.sh` and `.github/workflows/scripts/smoke-test.sh`.
 
@@ -207,6 +226,8 @@ src/main/java/com/anarchyphantoms/phantomcontrol/
 ├── PluginUpdater.java              # Backs /ap update and /ap rollback: fetches/stages CI-validated builds via GitHub Releases
 ├── BuildInfo.java                  # Baked-in version/commit info + repo URL, shown by /ap ver
 └── GitHistory.java                 # Baked-in commit history, shown by /ap git / git info / git history
+
+src/test/java/com/anarchyphantoms/phantomcontrol/  # MockBukkit/JUnit 5 behavioral suite — see Testing
 ```
 
 ## License
