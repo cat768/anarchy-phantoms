@@ -3,12 +3,14 @@ package com.anarchyphantoms.phantomcontrol;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.security.CodeSource;
 import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -30,6 +32,19 @@ import org.bukkit.command.CommandSender;
  * already watch and swap in automatically on the *next* restart. This class
  * never attempts to replace the running jar live; nothing here touches the
  * currently loaded plugin classes.
+ *
+ * <p><b>Update-folder files are matched by FILE NAME, not plugin name.</b>
+ * Paper/Folia decide which jar in {@code plugins/} an update-folder jar
+ * replaces purely by comparing file names - they do NOT read the
+ * {@code plugin.yml} {@code name:} field inside either jar (confirmed
+ * against PaperMC/Paper#6570 and PaperMC/Velocity#1258; an earlier version of
+ * this class assumed the opposite and staged everything under a fixed
+ * "AnarchyPhantoms.jar", which silently failed to apply whenever the jar
+ * actually sitting in plugins/ had any other name - e.g. a CI release asset
+ * downloaded as-is, which is named "anarchy-phantoms-git-&lt;sha&gt;.jar" or
+ * "anarchy-phantoms-latest.jar"). {@link #resolveRunningJarFileName()} avoids
+ * this by staging under whatever the currently-running jar is actually named
+ * on disk, discovered at runtime rather than assumed.
  *
  * <p><b>Two independent layers, not one.</b> It's tempting to think "CI only
  * publishes a {@code git-<sha>} release after every smoke-test leg passes, so
@@ -190,6 +205,11 @@ final class PluginUpdater {
                             + " to " + stagedPath + ".");
                     sender.sendMessage("[AnarchyPhantoms] This will replace the running jar on next restart "
                             + "(Paper/Folia's update-folder mechanism) - it is NOT applied live.");
+                    sender.sendMessage("[AnarchyPhantoms] Note: this only takes effect if the jar in "
+                            + "plugins/ has the SAME file name as the staged file above - Paper/Folia "
+                            + "match update-folder jars by file name, not by plugin name. If plugins/ "
+                            + "has a differently-named AnarchyPhantoms jar, rename or replace it to "
+                            + "match before restarting, or this update will be silently skipped.");
                     if (release.body != null && !release.body.isBlank()) {
                         for (String line : release.body.strip().split("\\R")) {
                             sender.sendMessage("  " + line);
@@ -224,12 +244,30 @@ final class PluginUpdater {
             throw new RuntimeException("could not create plugins/update/ directory: " + e.getMessage(), e);
         }
 
-        // Same file name every time: Paper/Folia identify which currently-loaded
-        // plugin an update-folder jar replaces by matching the plugin.yml `name`
-        // inside it, not the file name - but keeping a stable name here avoids
-        // accumulating stale jars from previous /ap update or /ap rollback runs.
-        Path dest = updateDir.resolve("AnarchyPhantoms.jar");
-        Path tmp = updateDir.resolve("AnarchyPhantoms.jar.download");
+        // CORRECTNESS-CRITICAL, previously wrong: Paper/Folia's update-folder
+        // mechanism matches purely by FILE NAME against what's already sitting
+        // in plugins/ - it does NOT read the plugin.yml `name` field inside
+        // the jar to figure out what to replace (confirmed against
+        // PaperMC/Paper#6570 and PaperMC/Velocity#1258). A jar staged here
+        // under any name other than the one already on disk in plugins/ is
+        // silently ignored on restart - no error, no log line, the old jar
+        // just boots again. This previously hardcoded "AnarchyPhantoms.jar",
+        // which only works if that's literally the file name in plugins/; any
+        // host or admin workflow that names the jar something else (e.g. a
+        // manually-downloaded "anarchy-phantoms-git-<sha>.jar", which is
+        // exactly what CI's own release assets are named) made every staged
+        // update a silent no-op.
+        //
+        // Fixed by discovering the CURRENTLY RUNNING jar's actual on-disk file
+        // name at staging time (via the classloader's CodeSource) and staging
+        // under that exact name, so the update-folder file always matches
+        // whatever the admin actually has sitting in plugins/ - no assumption
+        // about naming convention required. Falls back to "AnarchyPhantoms.jar"
+        // only if the running jar's location can't be determined (e.g. running
+        // from exploded classes in a test/dev environment).
+        String runningJarName = resolveRunningJarFileName();
+        Path dest = updateDir.resolve(runningJarName);
+        Path tmp = updateDir.resolve(runningJarName + ".download");
 
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(release.assetUrl))
@@ -322,6 +360,55 @@ final class PluginUpdater {
                     + "(expected 64 hex characters) - refusing to trust it");
         }
         return candidate;
+    }
+
+    /**
+     * Returns the file name (not full path) of the jar this class is
+     * currently loaded from - i.e. whatever is actually sitting in
+     * {@code plugins/} right now - so {@link #downloadVerifyAndStage} can
+     * stage under that exact name. This is the name Paper/Folia's
+     * update-folder logic will match against on the next restart; anything
+     * else is silently ignored (see the comment at the call site).
+     *
+     * <p>Falls back to "AnarchyPhantoms.jar" if the jar's location can't be
+     * determined (e.g. {@code PluginUpdater.class.getProtectionDomain()
+     * .getCodeSource()} returns null, which happens when classes are loaded
+     * from an exploded directory rather than a jar - a test/dev-only
+     * scenario, never a real Paper/Folia deployment). This fallback is
+     * intentionally the same name PluginUpdater used unconditionally before
+     * this fix, so behavior is unchanged for whatever fraction of setups
+     * happen to already use that name.
+     */
+    private String resolveRunningJarFileName() {
+        try {
+            CodeSource codeSource = PluginUpdater.class.getProtectionDomain().getCodeSource();
+            if (codeSource == null || codeSource.getLocation() == null) {
+                plugin.getLogger().warning(
+                        "Could not determine the running jar's location (no CodeSource) - "
+                        + "falling back to staging as 'AnarchyPhantoms.jar'. If the jar in "
+                        + "plugins/ has a different name, /ap update will appear to succeed but "
+                        + "will NOT actually be applied on restart.");
+                return "AnarchyPhantoms.jar";
+            }
+            Path jarPath = Path.of(codeSource.getLocation().toURI());
+            String fileName = jarPath.getFileName().toString();
+            if (fileName.isBlank() || !fileName.endsWith(".jar")) {
+                plugin.getLogger().warning(
+                        "Running jar's resolved file name ('" + fileName + "') doesn't look like a "
+                        + "jar - falling back to staging as 'AnarchyPhantoms.jar'. If the jar in "
+                        + "plugins/ has a different name, /ap update will appear to succeed but "
+                        + "will NOT actually be applied on restart.");
+                return "AnarchyPhantoms.jar";
+            }
+            return fileName;
+        } catch (URISyntaxException | RuntimeException e) {
+            plugin.getLogger().warning(
+                    "Failed to resolve the running jar's file name (" + e
+                    + ") - falling back to staging as 'AnarchyPhantoms.jar'. If the jar in "
+                    + "plugins/ has a different name, /ap update will appear to succeed but will "
+                    + "NOT actually be applied on restart.");
+            return "AnarchyPhantoms.jar";
+        }
     }
 
     private static MessageDigest newSha256() {
