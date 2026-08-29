@@ -57,8 +57,20 @@ abstract class PluginTestBase {
      * trivially see nothing but air.
      */
     protected static void setFloor(WorldMock world, int y, Material material) {
-        for (int x = -3; x <= 3; x++) {
-            for (int z = -3; z <= 3; z++) {
+        setFloor(world, y, material, 3);
+    }
+
+    /**
+     * Same as {@link #setFloor(WorldMock, int, Material)} but with a
+     * caller-specified radius. Needed by tests that sample columns well away
+     * from the origin/spawn point - e.g. PhantomEndSpawner picks a random
+     * column up to 20 blocks horizontally from the player, so a test driving
+     * that code path needs a floor at least that wide or nearly every sampled
+     * column lands on unset (void) blocks.
+     */
+    protected static void setFloor(WorldMock world, int y, Material material, int radius) {
+        for (int x = -radius; x <= radius; x++) {
+            for (int z = -radius; z <= radius; z++) {
                 world.getBlockAt(x, y, z).setType(material);
             }
         }

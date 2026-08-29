@@ -5,6 +5,7 @@ import org.bukkit.Material;
 import org.bukkit.entity.Phantom;
 import org.bukkit.event.entity.EntitySpawnEvent;
 import org.junit.jupiter.api.Test;
+import org.mockbukkit.mockbukkit.entity.PhantomMock;
 import org.mockbukkit.mockbukkit.entity.PlayerMock;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -42,7 +43,15 @@ class PhantomSoundListenerTest extends PluginTestBase {
         Phantom phantom = spawnPhantom();
         PlayerMock attacker = server.addPlayer();
 
-        phantom.damage(2.0, attacker);
+        // simulateDamage(), not damage(): plain damage() only mutates health
+        // and never fires an EntityDamageByEntityEvent, so the listener
+        // under test would never see the hit and the phantom would stay
+        // silent regardless of whether the plugin logic is correct.
+        // simulateDamage() lives only on the concrete PhantomMock, not the
+        // Phantom interface, so it needs a cast; world.spawn(loc,
+        // Phantom.class) is registered to always return a PhantomMock at
+        // runtime, so this is safe.
+        ((PhantomMock) phantom).simulateDamage(2.0, attacker);
 
         assertFalse(phantom.isSilent(), "A provoked phantom must have its screech un-silenced");
     }
@@ -52,7 +61,7 @@ class PhantomSoundListenerTest extends PluginTestBase {
         Phantom phantom = spawnPhantom();
         Phantom attacker = spawnPhantom();
 
-        phantom.damage(1.0, attacker);
+        ((PhantomMock) phantom).simulateDamage(1.0, attacker);
 
         assertTrue(phantom.isSilent(),
                 "Damage from a non-player source must not un-silence the phantom (tracker never marked it provoked)");

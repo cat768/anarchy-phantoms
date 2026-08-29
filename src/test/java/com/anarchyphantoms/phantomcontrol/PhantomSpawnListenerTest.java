@@ -2,11 +2,9 @@ package com.anarchyphantoms.phantomcontrol;
 
 import org.bukkit.Location;
 import org.bukkit.Material;
-import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Phantom;
 import org.bukkit.event.entity.CreatureSpawnEvent;
 import org.junit.jupiter.api.Test;
-import org.mockbukkit.mockbukkit.world.WorldMock;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;

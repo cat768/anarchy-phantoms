@@ -36,7 +36,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class PhantomEndSpawnerTest extends PluginTestBase {
 
     private PlayerMock movePlayerToEnd(PlayerMock player) {
-        setFloor(endWorld, 63, Material.END_STONE);
+        // PhantomEndSpawner.pickSpawnLocation samples random columns up to
+        // 20 blocks horizontally from the player (horizontalSpread), so the
+        // floor needs to cover that whole radius - a narrow floor directly
+        // under the player leaves nearly every sampled column void, and
+        // pickSpawnLocation returns null almost every attempt.
+        setFloor(endWorld, 63, Material.END_STONE, 20);
         World previousWorld = player.getWorld();
         player.setLocation(new Location(endWorld, 0.5, 70, 0.5));
         server.getPluginManager().callEvent(new PlayerChangedWorldEvent(player, previousWorld));

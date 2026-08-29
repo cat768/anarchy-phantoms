@@ -5,6 +5,7 @@ import org.bukkit.Material;
 import org.bukkit.entity.Phantom;
 import org.bukkit.event.entity.EntityTargetLivingEntityEvent;
 import org.junit.jupiter.api.Test;
+import org.mockbukkit.mockbukkit.entity.PhantomMock;
 import org.mockbukkit.mockbukkit.entity.PlayerMock;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -46,13 +47,19 @@ class PhantomBehaviorListenerTest extends PluginTestBase {
         Phantom phantom = spawnPhantom();
         PlayerMock attacker = server.addPlayer();
 
-        // Provoke the phantom the same way a real hit would: call the
-        // actual public Bukkit API a sword-swing ultimately invokes, which
-        // fires a real EntityDamageByEntityEvent through the plugin's
-        // registered listener - rather than hand-constructing that event
+        // Provoke the phantom the same way a real hit would. Note this must
+        // be simulateDamage(), not plain damage(): LivingEntityMock#damage()
+        // only mutates health directly and never fires an
+        // EntityDamageByEntityEvent, so the plugin's registered listener
+        // would never see the hit. simulateDamage() is MockBukkit's
+        // event-firing equivalent of the real Bukkit API a sword-swing
+        // ultimately invokes - rather than hand-constructing that event
         // (whose exact constructor overload set has changed across API
-        // versions) directly in the test.
-        phantom.damage(2.0, attacker);
+        // versions) directly in the test. simulateDamage() is only declared
+        // on the concrete LivingEntityMock/PhantomMock, not on the Phantom
+        // interface, so it needs a cast; world.spawn(loc, Phantom.class) is
+        // registered to always return a PhantomMock at runtime, so this is safe.
+        ((PhantomMock) phantom).simulateDamage(2.0, attacker);
 
         EntityTargetLivingEntityEvent targetEvent =
                 new EntityTargetLivingEntityEvent(phantom, attacker, EntityTargetLivingEntityEvent.TargetReason.CLOSEST_PLAYER);
@@ -68,7 +75,7 @@ class PhantomBehaviorListenerTest extends PluginTestBase {
         Phantom phantom = spawnPhantom();
         Phantom otherPhantom = spawnPhantom();
 
-        phantom.damage(1.0, otherPhantom);
+        ((PhantomMock) phantom).simulateDamage(1.0, otherPhantom);
 
         PlayerMock somePlayer = server.addPlayer();
         EntityTargetLivingEntityEvent targetEvent =
@@ -84,7 +91,7 @@ class PhantomBehaviorListenerTest extends PluginTestBase {
         Phantom bystander = spawnPhantom();
         PlayerMock attacker = server.addPlayer();
 
-        attacked.damage(2.0, attacker);
+        ((PhantomMock) attacked).simulateDamage(2.0, attacker);
 
         EntityTargetLivingEntityEvent bystanderTarget =
                 new EntityTargetLivingEntityEvent(bystander, attacker, EntityTargetLivingEntityEvent.TargetReason.CLOSEST_PLAYER);
