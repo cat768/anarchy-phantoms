@@ -278,22 +278,126 @@ jobs:
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------
-  # 4. Publish only after every smoke-test leg (Paper AND Folia, every
+  # 4. Collect every job's logs from this run into one combined .log, plus
+  #    a .zip bundling that log with every artifact already uploaded above
+  #    (surefire-reports, each smoke-test's server/console log). This is
+  #    for after-the-fact debugging - "why did the build break on commit
+  #    X" - without digging through the Actions UI or hoping the run
+  #    hasn't hit GitHub's log-retention window yet.
+  #
+  #    `if: always()` and no `needs` gate other than existing (not
+  #    succeeding): this must still produce a log bundle when unit-test,
+  #    build, or a smoke-test leg FAILED - that's exactly the case someone
+  #    would come back to reference. It waits on every job so the combined
+  #    log is complete regardless of pass/fail.
+  #
+  #    Uses `gh run view --log` rather than hand-concatenating each job's
+  #    output: that command returns GitHub's own authoritative interleaved
+  #    log for the whole run (every job, every step, in the order they
+  #    actually ran), so nothing here can drift out of sync if a job is
+  #    added/renamed later.
+  # ---------------------------------------------------------------------
+  collect-logs:
+    needs: [unit-test, build, generate-matrix, smoke-test]
+    if: always() && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      log_path: ${{ steps.bundle.outputs.log_path }}
+      zip_path: ${{ steps.bundle.outputs.zip_path }}
+    steps:
+      - name: Download all job artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+        continue-on-error: true # e.g. surefire-reports/smoke-log-* may not all exist if a job never ran
+
+      - name: Fetch combined run log
+        id: fetch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p logbundle
+          # Full interleaved log for every job/step in this run.
+          gh run view "${{ github.run_id }}" --repo "${{ github.repository }}" --log \
+            > "logbundle/build-${{ needs.build.outputs.short_sha || github.sha }}.log" \
+            || echo "(gh run view --log failed to return full output - see whatever was captured above)" \
+              >> "logbundle/build-${{ needs.build.outputs.short_sha || github.sha }}.log"
+
+      - name: Bundle log + artifacts into a zip
+        id: bundle
+        run: |
+          set -euo pipefail
+          sha="${{ needs.build.outputs.short_sha || github.sha }}"
+          log_name="build-${sha}.log"
+          zip_name="ci-logs-${sha}.zip"
+
+          mv "logbundle/${log_name}" .
+          mkdir -p ci-logs
+          cp "${log_name}" ci-logs/
+          # Pull in surefire-reports/ and every smoke-log-*/ dir if present.
+          if [ -d artifacts ]; then
+            cp -r artifacts/* ci-logs/ 2>/dev/null || true
+          fi
+
+          zip -r "${zip_name}" ci-logs >/dev/null
+
+          echo "log_path=${log_name}" >> "$GITHUB_OUTPUT"
+          echo "zip_path=${zip_name}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload combined log
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-log-${{ needs.build.outputs.short_sha || github.sha }}
+          path: ${{ steps.bundle.outputs.log_path }}
+          if-no-files-found: warn
+
+      - name: Upload CI logs zip
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-logs-${{ needs.build.outputs.short_sha || github.sha }}
+          path: ${{ steps.bundle.outputs.zip_path }}
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------
+  # 5. Publish only after every smoke-test leg (Paper AND Folia, every
   #    discovered version) has passed. Re-downloads the same jar built in
   #    step 1 rather than rebuilding — publishing must ship literally the
   #    bytes that were tested, not a fresh compile of possibly-changed
   #    source (irrelevant here since it's the same commit, but keeps the
   #    "test what you ship" invariant explicit).
+  #
+  #    Also depends on collect-logs so the combined .log and .zip exist
+  #    before this runs, but does NOT require collect-logs to have
+  #    succeeded (see the `if:` below) - a hiccup in log bundling should
+  #    never block shipping a jar that passed every smoke test.
   # ---------------------------------------------------------------------
   publish:
-    needs: [build, smoke-test]
-    if: github.event_name != 'pull_request'
+    needs: [build, smoke-test, collect-logs]
+    if: |
+      github.event_name != 'pull_request' &&
+      needs.build.result == 'success' &&
+      needs.smoke-test.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Download jar artifact
         uses: actions/download-artifact@v7
         with:
           name: jar-${{ needs.build.outputs.short_sha }}
+          path: dist
+
+      - name: Download combined log
+        uses: actions/download-artifact@v7
+        continue-on-error: true # don't fail publish if log collection had issues
+        with:
+          name: build-log-${{ needs.build.outputs.short_sha }}
+          path: dist
+
+      - name: Download CI logs zip
+        uses: actions/download-artifact@v7
+        continue-on-error: true
+        with:
+          name: ci-logs-${{ needs.build.outputs.short_sha }}
           path: dist
 
       - name: Prepare latest-named copy
@@ -305,10 +409,36 @@ jobs:
           echo "path=dist/anarchy-phantoms-latest.jar" >> "$GITHUB_OUTPUT"
           echo "digest_path=dist/anarchy-phantoms-latest.jar.sha256" >> "$GITHUB_OUTPUT"
 
+          # Logs/zip are best-effort (collect-logs can fail without blocking
+          # publish - see above), so only produce "latest"-named copies if
+          # the source files actually made it into dist/.
+          log_src="dist/build-${{ needs.build.outputs.short_sha }}.log"
+          zip_src="dist/ci-logs-${{ needs.build.outputs.short_sha }}.zip"
+          if [ -f "$log_src" ]; then
+            cp "$log_src" "dist/anarchy-phantoms-latest-build.log"
+            echo "log_path=dist/anarchy-phantoms-latest-build.log" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::combined build log missing for this run - 'latest' release will publish without it"
+            echo "log_path=" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -f "$zip_src" ]; then
+            cp "$zip_src" "dist/anarchy-phantoms-latest-ci-logs.zip"
+            echo "zip_path=dist/anarchy-phantoms-latest-ci-logs.zip" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::ci logs zip missing for this run - 'latest' release will publish without it"
+            echo "zip_path=" >> "$GITHUB_OUTPUT"
+          fi
+
       # Both the jar and its .sha256 digest are attached to every release.
       # PluginUpdater requires the digest asset to be present and to verify
       # before it will stage anything - a release with a jar but no matching
       # digest is treated as untrustworthy, same as a checksum mismatch.
+      #
+      # The combined build-<sha>.log and ci-logs-<sha>.zip are attached too
+      # (best-effort - see the collect-logs job's continue-on-error above)
+      # so a broken build can be diagnosed later straight from the release,
+      # without needing the Actions run to still be within its retention
+      # window.
       - name: Publish per-commit release
         uses: softprops/action-gh-release@v3
         with:
@@ -321,11 +451,24 @@ jobs:
             (Paper 1.21.9 included via its pinned ALPHA build - Paper never shipped a STABLE
             build for that version).
             SHA-256: `${{ needs.build.outputs.jar_sha256 }}`
+
+            Full CI logs for this run: `build-${{ needs.build.outputs.short_sha }}.log`
+            (combined) and `ci-logs-${{ needs.build.outputs.short_sha }}.zip`
+            (log + per-leg smoke-test/surefire reports).
           prerelease: true
           make_latest: false
+          # build-*.log / ci-logs-*.zip use a glob (rather than the exact
+          # expected name) because they're best-effort: if collect-logs
+          # failed, these files simply won't be in dist/, and a glob with
+          # zero matches is silently skipped by this action instead of
+          # failing the whole release step the way a missing exact
+          # filename would.
           files: |
             dist/${{ needs.build.outputs.jar_name }}
             dist/${{ needs.build.outputs.jar_name }}.sha256
+            dist/build-${{ needs.build.outputs.short_sha }}.log
+            dist/ci-logs-${{ needs.build.outputs.short_sha }}.zip
+          fail_on_unmatched_files: false
 
       # softprops/action-gh-release only uploads/overwrites the files it's
       # given - it never removes assets already attached to the release.
@@ -369,8 +512,21 @@ jobs:
             the newest jar is kept here. For older builds, see the
             per-commit `git-<sha>` releases.
             SHA-256: `${{ needs.build.outputs.jar_sha256 }}`
+
+            `anarchy-phantoms-latest-build.log` and
+            `anarchy-phantoms-latest-ci-logs.zip` are this run's combined
+            CI log / full log-and-report bundle, for debugging a broken
+            build after the fact. Like the jar, these are overwritten every
+            push - see the per-commit `git-<sha>` release for an older run's
+            logs.
           prerelease: false
           make_latest: true
+          # See the per-commit release step above for why the log/zip
+          # entries need fail_on_unmatched_files: false - steps.latest only
+          # sets log_path/zip_path when the source file actually exists.
           files: |
             ${{ steps.latest.outputs.path }}
             ${{ steps.latest.outputs.digest_path }}
+            ${{ steps.latest.outputs.log_path }}
+            ${{ steps.latest.outputs.zip_path }}
+          fail_on_unmatched_files: false
