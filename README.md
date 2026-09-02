@@ -174,6 +174,9 @@ Reported on each player's Plan page:
 | Phantoms Provoked | How many phantoms this player has provoked (first hit only) |
 | Phantoms Active Nearby | Phantoms currently within spawn-check radius, as of the last check cycle |
 | Has Provoked a Phantom | Yes/No |
+| End-Spawn Location Misses | Times a spawn roll near this player found no allowed surface block in any sampled column (common on thin bridges or void-heavy outer End islands) |
+| First / Last Phantom Nearby | UTC timestamp of this player's first and most recent End-spawner phantom |
+| First / Last Provocation | UTC timestamp of this player's first and most recent provocation |
 
 Reported on Plan's server overview page:
 
@@ -181,9 +184,16 @@ Reported on Plan's server overview page:
 |---|---|
 | Total Phantoms Spawned | Server-wide lifetime count of End-spawner spawns |
 | Total Provocations | Server-wide lifetime count of provocations |
-| End-Spawner Success Rate | Share of spawn attempts that resulted in a live phantom (vs. vetoed by the surface/dimension checks) |
+| End-Spawner Success Rate | Share of spawn attempts that resulted in a live phantom (vs. vetoed after `world.spawn()`, e.g. by the surface/dimension checks) |
+| Total Location Pick Misses | Server-wide count of spawn attempts that found no valid surface at all, before ever reaching `world.spawn()` - distinct from a vetoed spawn |
+| Location Pick Miss Rate | Share of all attempts that missed before reaching `world.spawn()`; a high/rising rate usually means `allowed-surface-blocks` or the spawn search needs tuning for this map's terrain |
+| Total Vetoed Spawns | Server-wide count of attempts that reached `world.spawn()` but were rejected afterward |
 
-These are in-memory counters (see `PhantomStatsTracker`), so they reset on server restart - they're meant to reflect ongoing activity, not a permanent historical log.
+### Persistence
+
+These counters live in memory by default (see `PhantomStatsTracker`) and reset on server restart. If Plan is installed **and** its Query API capability is available, `PlanHook` also wires up `PlanStatsRepository`, which mirrors every counter update into two small tables inside **Plan's own database** (SQLite or MySQL, whichever Plan is already configured with) via Plan's Query API - no second set of DB credentials, no separate storage file of AnarchyPhantoms' own. On startup, it hydrates `PhantomStatsTracker` from that data so in-game/Plan-panel numbers agree with history immediately, rather than only catching up as new events happen. Writes are fire-and-forget through Plan's async `QueryService#execute`, so nothing on the plugin's hot paths (including Folia per-entity/per-region scheduler threads) ever blocks on I/O. The one exception is "Phantoms Active Nearby" - a live, momentary count that's cheap to recompute and not meaningful to carry across a restart, so it's deliberately never persisted.
+
+If Plan isn't installed, or its Query API capability isn't present, behavior is exactly what it was before: pure in-memory counters, no I/O, nothing written anywhere.
 
 ## Compatibility
 
@@ -222,9 +232,10 @@ src/main/java/com/anarchyphantoms/phantomcontrol/
 ├── PhantomProvocationTracker.java  # Per-entity "provoked" state via PersistentDataContainer
 ├── PhantomSoundListener.java       # Suppresses ambient phantom sounds until provoked
 ├── PhantomDebugNotifier.java       # Single dispatcher for debug output (console + anarchyphantoms.debug players)
-├── PhantomStatsTracker.java        # In-memory spawn/provocation counters, fed to Plan (see below)
+├── PhantomStatsTracker.java        # Spawn/provocation counters (in-memory, optionally persisted), fed to Plan (see below)
 ├── PlanHook.java                   # Isolated Plan Player Analytics API access (optional soft-dependency)
 ├── AnarchyPhantomsDataExtension.java # Plan DataExtension: exposes PhantomStatsTracker's counters to Plan's web panel
+├── PlanStatsRepository.java        # Persists PhantomStatsTracker's counters into Plan's own database via its Query API
 ├── PluginUpdater.java              # Backs /ap update and /ap rollback: fetches/stages CI-validated builds via GitHub Releases
 ├── BuildInfo.java                  # Baked-in version/commit info + repo URL, shown by /ap ver
 └── GitHistory.java                 # Baked-in commit history, shown by /ap git / git info / git history
