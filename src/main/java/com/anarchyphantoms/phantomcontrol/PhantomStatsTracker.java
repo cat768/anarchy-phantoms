@@ -17,22 +17,34 @@ import java.util.logging.Logger;
  * their perspective, fed from the same call sites that already produce
  * debug output.
  *
- * Deliberately in-memory rather than persisted:
+ * In-memory by default, with optional persistence bolted on:
  *  - PhantomProvocationTracker already persists per-entity state via PDC,
  *    which is the state that actually needs to survive a restart (governs
  *    behavior). These counters are display-only aggregates derived from
- *    events as they happen; losing them on restart just means Plan (or
- *    anything else reading this class) reports "since last restart" numbers,
- *    which is an acceptable, common pattern for this kind of live counter.
- *  - Avoids adding a database/file dependency to a plugin that currently has
- *    none, purely to support an optional third-party integration.
+ *    events as they happen, so losing them on restart was historically
+ *    treated as acceptable.
+ *  - However, if Plan Player Analytics is installed, {@link PlanHook} wires
+ *    a {@link StatsPersistenceSink} into {@link #setPersistenceSink} that
+ *    mirrors every counter update into a table inside Plan's own database
+ *    (see PlanStatsRepository) - reusing Plan's already-configured DB
+ *    connection rather than adding a separate storage dependency to this
+ *    plugin. When Plan isn't installed, no sink is set and behavior is
+ *    unchanged from before: purely in-memory, "since last restart" numbers.
+ *  - {@link PlanHook} also hydrates this tracker from that table on enable
+ *    (see {@link #restoreServerTotals} / {@link #restorePlayerCounters}) so
+ *    both this plugin's own view and Plan's page agree immediately after a
+ *    restart, rather than only converging once fresh events happen.
  *
  * Thread-safety: counters use LongAdder/AtomicLong and the per-player map is
  * a ConcurrentHashMap, since call sites span multiple per-player/per-entity
  * EntityScheduler threads under Folia (see PhantomEndSpawner, PhantomBehaviorListener)
  * as well as Plan's own async extension-method calls. No method here does
  * any Bukkit API access (no entity/world reads), so none of it needs to run
- * on any particular region thread - it's plain counter bookkeeping.
+ * on any particular region thread - it's plain counter bookkeeping. The
+ * optional persistence sink is called synchronously from these same
+ * call sites, so any sink implementation MUST be non-blocking (fire-and-forget
+ * its actual I/O) - see PlanStatsRepository, which delegates to Plan's
+ * QueryService#execute (async) and never waits on the result here.
  */
 public final class PhantomStatsTracker {
 
@@ -63,6 +75,72 @@ public final class PhantomStatsTracker {
     private final LongAdder totalLocationPickAttempts = new LongAdder();
 
     /**
+     * Optional persistence hook, wired up by {@link PlanHook#hookIntoPlan()}
+     * only when Plan is actually installed and enabled; null otherwise
+     * (the default), in which case this class behaves exactly as it always
+     * has - a plain in-memory counter set with no I/O anywhere.
+     *
+     * Plain volatile rather than an AtomicReference: it's set at most once
+     * per plugin lifecycle (from PlanHook, shortly after onEnable/on a Plan
+     * reload) and read far more often than written, so a simple
+     * publish-once-read-many field is enough - no compare-and-swap or
+     * multi-field atomicity is needed here.
+     */
+    private volatile StatsPersistenceSink persistenceSink;
+
+    /**
+     * Wires (or clears, if {@code sink} is null) the optional persistence
+     * sink. Called by PlanHook once Plan's DataExtension/QueryService are
+     * confirmed available - never called directly by anything that isn't
+     * isolating Plan's classes, so this class itself stays free of any
+     * Plan import (see PlanHook's class javadoc for why that isolation
+     * matters).
+     */
+    void setPersistenceSink(StatsPersistenceSink sink) {
+        this.persistenceSink = sink;
+    }
+
+    /**
+     * Restores a single player's counters/timestamps from persisted storage.
+     * Intended to be called only by PlanHook during startup hydration,
+     * before any live gameplay events for this tracker instance have been
+     * recorded - it unconditionally overwrites whatever (should be
+     * all-zero/default) counters already exist for this player rather than
+     * merging, since at hydration time there is nothing legitimate to merge
+     * with yet.
+     *
+     * Does NOT re-invoke the persistence sink (this is loading FROM storage,
+     * not a new event TO persist) - callers restoring many players in a
+     * batch don't need to worry about redundant write-back per row.
+     */
+    void restorePlayerCounters(UUID playerId, PersistedPlayerCounters saved) {
+        PlayerCounters c = counters(playerId);
+        c.phantomsSpawnedNearby.add(saved.phantomsSpawnedNearby());
+        c.provocations.add(saved.provocations());
+        c.locationPickMisses.add(saved.locationPickMisses());
+        c.activeNearby.set(saved.activeNearby());
+        c.firstSpawnedNearbyMillis.set(saved.firstSpawnedNearbyMillis());
+        c.lastSpawnedNearbyMillis.set(saved.lastSpawnedNearbyMillis());
+        c.firstProvocationMillis.set(saved.firstProvocationMillis());
+        c.lastProvocationMillis.set(saved.lastProvocationMillis());
+        c.lastLocationPickMissMillis.set(saved.lastLocationPickMissMillis());
+    }
+
+    /**
+     * Restores the server-wide totals from persisted storage. Like
+     * {@link #restorePlayerCounters}, intended to run once at startup before
+     * any live events land on this tracker instance, and does not re-invoke
+     * the persistence sink.
+     */
+    void restoreServerTotals(PersistedServerTotals saved) {
+        totalEndSpawnerSpawns.add(saved.totalEndSpawnerSpawns());
+        totalEndSpawnerVetoedSpawns.add(saved.totalEndSpawnerVetoedSpawns());
+        totalProvocations.add(saved.totalProvocations());
+        totalLocationPickMisses.add(saved.totalLocationPickMisses());
+        totalLocationPickAttempts.add(saved.totalLocationPickAttempts());
+    }
+
+    /**
      * Called by PhantomEndSpawner right after a successful active-spawn
      * (the phantom passed PhantomSpawnListener's veto check and is alive in
      * the world), attributing it to the player whose presence triggered it.
@@ -70,11 +148,17 @@ public final class PhantomStatsTracker {
     public void recordEndSpawnerSuccess(Player nearPlayer) {
         totalEndSpawnerSpawns.increment();
         totalLocationPickAttempts.increment();
-        PlayerCounters c = counters(nearPlayer.getUniqueId());
+        UUID playerId = nearPlayer.getUniqueId();
+        PlayerCounters c = counters(playerId);
         c.phantomsSpawnedNearby.increment();
         long now = System.currentTimeMillis();
         c.lastSpawnedNearbyMillis.set(now);
         c.firstSpawnedNearbyMillis.compareAndSet(0L, now);
+
+        StatsPersistenceSink sink = persistenceSink;
+        if (sink != null) {
+            sink.onEndSpawnerSuccess(playerId, now);
+        }
     }
 
     /**
@@ -86,6 +170,11 @@ public final class PhantomStatsTracker {
      */
     public void recordEndSpawnerVetoed() {
         totalEndSpawnerVetoedSpawns.increment();
+
+        StatsPersistenceSink sink = persistenceSink;
+        if (sink != null) {
+            sink.onEndSpawnerVetoed();
+        }
     }
 
     /**
@@ -121,9 +210,11 @@ public final class PhantomStatsTracker {
     public void recordLocationPickMiss(Player player) {
         totalLocationPickMisses.increment();
         totalLocationPickAttempts.increment();
-        PlayerCounters c = counters(player.getUniqueId());
+        UUID playerId = player.getUniqueId();
+        PlayerCounters c = counters(playerId);
         c.locationPickMisses.increment();
-        c.lastLocationPickMissMillis.set(System.currentTimeMillis());
+        long now = System.currentTimeMillis();
+        c.lastLocationPickMissMillis.set(now);
 
         LOGGER.log(Level.INFO, "[AnarchyPhantoms] End-spawn location pick missed for {0} "
                         + "(no allowed surface block found in any sampled column near {1}, {2}, {3})",
@@ -133,6 +224,11 @@ public final class PhantomStatsTracker {
                         player.getLocation().getBlockY(),
                         player.getLocation().getBlockZ()
                 });
+
+        StatsPersistenceSink sink = persistenceSink;
+        if (sink != null) {
+            sink.onLocationPickMiss(playerId, now);
+        }
     }
 
     /**
@@ -143,11 +239,17 @@ public final class PhantomStatsTracker {
      */
     public void recordProvocation(Player attacker) {
         totalProvocations.increment();
-        PlayerCounters c = counters(attacker.getUniqueId());
+        UUID playerId = attacker.getUniqueId();
+        PlayerCounters c = counters(playerId);
         c.provocations.increment();
         long now = System.currentTimeMillis();
         c.lastProvocationMillis.set(now);
         c.firstProvocationMillis.compareAndSet(0L, now);
+
+        StatsPersistenceSink sink = persistenceSink;
+        if (sink != null) {
+            sink.onProvocation(playerId, now);
+        }
     }
 
     /** Lifetime count of phantoms actively spawned by PhantomEndSpawner near this player. */
@@ -254,6 +356,17 @@ public final class PhantomStatsTracker {
      * stays reasonably fresh without a dedicated extra scan solely for
      * Plan's benefit - it piggybacks on a count PhantomEndSpawner already
      * performs every check cycle regardless of whether this tracker exists.
+     *
+     * Deliberately NOT persisted (see {@link #restorePlayerCounters}, which
+     * never touches activeNearby): this is a live, momentary snapshot that
+     * changes on essentially every check cycle for every online player, so
+     * writing it to Plan's database on every call would add a large,
+     * pointless amount of write pressure for a number that's inherently
+     * stale the instant the server actually restarts anyway - "active
+     * nearby right now" from three hours before a reboot isn't meaningful
+     * data to carry forward, unlike the lifetime counters/timestamps above.
+     * It naturally starts back at 0 after a restart and refills itself
+     * within one check cycle per online player.
      */
     public void reportActiveNearby(Player player, int count) {
         counters(player.getUniqueId()).activeNearby.set(count);
@@ -290,5 +403,71 @@ public final class PhantomStatsTracker {
         final AtomicLong firstProvocationMillis = new AtomicLong(0L);
         final AtomicLong lastProvocationMillis = new AtomicLong(0L);
         final AtomicLong lastLocationPickMissMillis = new AtomicLong(0L);
+    }
+
+    /**
+     * Optional write-through target for this tracker's counter updates,
+     * implemented by PlanStatsRepository and wired in by PlanHook only when
+     * Plan Player Analytics is installed and its Query API is available.
+     *
+     * Deliberately package-private and free of any Plan import itself
+     * (UUID/long parameters only) - PhantomStatsTracker must stay loadable
+     * with or without Plan present, so this interface can't reference any
+     * Plan type without reintroducing the exact NoClassDefFoundError risk
+     * PlanHook's isolation is meant to prevent. PlanStatsRepository is what
+     * bridges the two: it implements this plain interface on one side and
+     * holds the Plan QueryService on the other.
+     *
+     * Every method here is called synchronously from the same hot call
+     * sites as the corresponding PhantomStatsTracker#record* method
+     * (including Folia per-entity/per-region scheduler threads), so
+     * implementations MUST return promptly and push their actual I/O onto
+     * Plan's own async QueryService#execute rather than blocking here.
+     */
+    interface StatsPersistenceSink {
+        /** Mirrors {@link #recordEndSpawnerSuccess}. {@code atMillis} is the exact instant already recorded in memory, kept identical rather than re-read to avoid any skew between the two. */
+        void onEndSpawnerSuccess(UUID playerId, long atMillis);
+
+        /** Mirrors {@link #recordEndSpawnerVetoed}. Server-wide only; no player is attributable at this call site (see PhantomEndSpawner). */
+        void onEndSpawnerVetoed();
+
+        /** Mirrors {@link #recordLocationPickMiss}. {@code atMillis} is the exact instant already recorded in memory. */
+        void onLocationPickMiss(UUID playerId, long atMillis);
+
+        /** Mirrors {@link #recordProvocation}. {@code atMillis} is the exact instant already recorded in memory. */
+        void onProvocation(UUID playerId, long atMillis);
+    }
+
+    /**
+     * Immutable snapshot of one player's persisted counters/timestamps, as
+     * loaded from Plan's database by PlanStatsRepository and handed to
+     * {@link #restorePlayerCounters} during startup hydration. Field order
+     * matches PlayerCounters' declaration order for easy visual comparison.
+     */
+    record PersistedPlayerCounters(
+            long phantomsSpawnedNearby,
+            long provocations,
+            long locationPickMisses,
+            long activeNearby,
+            long firstSpawnedNearbyMillis,
+            long lastSpawnedNearbyMillis,
+            long firstProvocationMillis,
+            long lastProvocationMillis,
+            long lastLocationPickMissMillis
+    ) {
+    }
+
+    /**
+     * Immutable snapshot of the server-wide totals, as loaded from Plan's
+     * database by PlanStatsRepository and handed to
+     * {@link #restoreServerTotals} during startup hydration.
+     */
+    record PersistedServerTotals(
+            long totalEndSpawnerSpawns,
+            long totalEndSpawnerVetoedSpawns,
+            long totalProvocations,
+            long totalLocationPickMisses,
+            long totalLocationPickAttempts
+    ) {
     }
 }

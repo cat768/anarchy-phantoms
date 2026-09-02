@@ -2,7 +2,10 @@ package com.anarchyphantoms.phantomcontrol;
 
 import com.djrapitops.plan.capability.CapabilityService;
 import com.djrapitops.plan.extension.ExtensionService;
+import com.djrapitops.plan.query.QueryService;
 
+import java.util.Map;
+import java.util.UUID;
 import java.util.logging.Level;
 
 /**
@@ -35,6 +38,17 @@ final class PlanHook {
      */
     private static final String REQUIRED_CAPABILITY = "DATA_EXTENSION_VALUES";
 
+    /**
+     * Capability required for the Query API (QueryService#execute/query,
+     * used by PlanStatsRepository to persist stats into Plan's own
+     * database). Checked independently of REQUIRED_CAPABILITY: a Plan build
+     * new enough for DataExtension but too old for Query API should still
+     * get the Plan panel integration, just without persistence - the two
+     * features aren't coupled from the server owner's perspective, so
+     * their availability checks shouldn't be coupled here either.
+     */
+    private static final String QUERY_API_CAPABILITY = "QUERY_API";
+
     private final AnarchyPhantomsPlugin plugin;
     private final PhantomStatsTracker statsTracker;
 
@@ -61,6 +75,77 @@ final class PlanHook {
 
         registerDataExtension();
         listenForPlanReloads();
+        setUpPersistence();
+    }
+
+    /**
+     * Wires PhantomStatsTracker up to persist into Plan's own database, and
+     * immediately hydrates it from whatever was already there - both are
+     * skipped (statsTracker is simply left running in-memory-only, exactly
+     * as it behaved before this feature existed) if the Query API
+     * capability isn't available, e.g. an older Plan build that still
+     * supports DataExtension but predates Query API. This mirrors
+     * registerDataExtension()'s own capability-gated, exception-guarded
+     * shape rather than assuming Query API exists just because
+     * capabilityAvailable() (which only checks DATA_EXTENSION_VALUES)
+     * returned true above.
+     */
+    private void setUpPersistence() {
+        if (!queryApiAvailable()) {
+            plugin.getLogger().info("Plan's Query API is not available (older Plan build?) - "
+                    + "AnarchyPhantoms stats will not persist across restarts, but the Plan panel integration above still works.");
+            return;
+        }
+
+        try {
+            PlanStatsRepository repository = new PlanStatsRepository(QueryService.getInstance());
+            hydrateFromRepository(repository);
+            statsTracker.setPersistenceSink(repository);
+            plugin.getLogger().info("AnarchyPhantoms phantom stats will now persist in Plan's database across restarts.");
+        } catch (NoClassDefFoundError planIsNotInstalled) {
+            // Same defensive shadow as registerDataExtension() - guards
+            // against Plan's classes disappearing mid-reload between the
+            // capability check above and this call.
+            plugin.getLogger().info("Plan classes not present - skipping stats persistence.");
+        } catch (IllegalStateException planIsNotEnabled) {
+            plugin.getLogger().info("Plan is installed but not currently enabled - skipping stats persistence for now.");
+        } catch (RuntimeException persistenceSetupFailed) {
+            // Covers unexpected failures from table creation/hydration
+            // (e.g. a misbehaving custom database driver) without ever
+            // letting a Plan-side problem prevent AnarchyPhantoms itself
+            // from finishing onEnable - persistence is strictly additive.
+            plugin.getLogger().log(Level.WARNING,
+                    "Failed to set up AnarchyPhantoms stats persistence in Plan's database - "
+                            + "stats will remain in-memory-only for this session.",
+                    persistenceSetupFailed);
+        }
+    }
+
+    private boolean queryApiAvailable() {
+        try {
+            return CapabilityService.getInstance().hasCapability(QUERY_API_CAPABILITY);
+        } catch (NoClassDefFoundError | IllegalStateException notInstalledOrNotReady) {
+            return false;
+        }
+    }
+
+    /**
+     * Loads every persisted counter back into statsTracker before wiring up
+     * the sink for new writes, so a player who already has history isn't
+     * shown all-zero stats (in-game or in Plan) until they trigger a fresh
+     * event - see PhantomStatsTracker#restorePlayerCounters/restoreServerTotals.
+     * Runs synchronously during onEnable (see PlanStatsRepository's class
+     * javadoc for why the blocking reads here are safe at this specific
+     * point in the plugin lifecycle).
+     */
+    private void hydrateFromRepository(PlanStatsRepository repository) {
+        Map<UUID, PhantomStatsTracker.PersistedPlayerCounters> playerCounters = repository.loadAllPlayerCounters();
+        for (Map.Entry<UUID, PhantomStatsTracker.PersistedPlayerCounters> entry : playerCounters.entrySet()) {
+            statsTracker.restorePlayerCounters(entry.getKey(), entry.getValue());
+        }
+        statsTracker.restoreServerTotals(repository.loadServerTotals());
+        plugin.getLogger().info("Restored AnarchyPhantoms stats for " + playerCounters.size()
+                + " player(s) from Plan's database.");
     }
 
     private boolean capabilityAvailable() {
@@ -100,6 +185,15 @@ final class PlanHook {
      * extensions, so without this listener AnarchyPhantoms' panel would
      * silently disappear from Plan's web UI until the next full server
      * restart.
+     *
+     * Deliberately only re-registers the DataExtension, not
+     * setUpPersistence(): the extension registry is what Plan actually
+     * clears on reload, but statsTracker's persistence sink and its
+     * already-hydrated in-memory counters are untouched by a Plan reload -
+     * re-running setUpPersistence() here would re-hydrate from the
+     * database and clobber every counter update this session has recorded
+     * in memory since the plugin actually started, silently rewinding
+     * live totals back to their last-persisted values.
      */
     private void listenForPlanReloads() {
         try {
