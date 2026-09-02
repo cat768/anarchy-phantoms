@@ -158,6 +158,16 @@ public final class PhantomBehaviorListener implements Listener {
 
         boolean newlyProvoked = tracker.markProvoked(phantom, phantom.getWorld().getFullTime());
         if (newlyProvoked) {
+            // Force immediate re-acquisition of the attacker as a target.
+            // Without this, the phantom is correctly marked provoked and
+            // future EntityTargetLivingEntityEvents will be allowed through,
+            // but vanilla AI doesn't necessarily retry target acquisition
+            // right away (it already failed once while the phantom was
+            // passive, and phantom target goals back off for a bit after a
+            // failed attempt). That left provoked phantoms sitting idle for
+            // several seconds after being hit instead of attacking, which is
+            // the actual bug this line fixes.
+            phantom.setTarget(attacker);
             debugNotifier.becameAggressive(phantom.getLocation(), "attacked by player " + attacker.getName());
             statsTracker.recordProvocation(attacker);
             // (Re-)arm the expiry recheck now that this phantom has a fresh
