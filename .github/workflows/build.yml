@@ -2,13 +2,25 @@ name: Build
 
 # Runs a fast MockBukkit/JUnit behavioral test suite first (unit-test),
 # gating everything else. On push to main / workflow_dispatch, it then
-# compiles the jar once and smoke-tests it against every supported Paper
-# AND Folia version (>= MIN_MC_VERSION) that currently has a STABLE build,
-# discovered at runtime from PaperMC's Fill API. Publishing only happens if
-# every leg of the smoke-test matrix passes. On a pull_request, only
-# unit-test runs (see the `if:` on every other job) - PRs get fast
-# behavioral feedback without spending CI time on the full boot-matrix or
-# attempting to cut a release from an unmerged head.
+# compiles the jar once and smoke-tests it against four separate matrices,
+# covering every supported Paper AND Folia version (>= MIN_MC_VERSION) that
+# currently has a STABLE build, discovered at runtime from PaperMC's Fill
+# API:
+#   1. Paper, no plugins
+#   2. Folia, no plugins
+#   3. Paper, with Plan Player Analytics (latest release) also installed
+#   4. Folia, with Plan Player Analytics (latest release) also installed
+# The two "with Plan" matrices exist because AnarchyPhantoms has an optional
+# soft-dependency integration with Plan (see PlanHook.java) - matrices 3/4
+# smoke-test that integration actually engages, not just that the jar loads
+# with Plan present. All four are one discovered version list fanned out by
+# the `plan` axis - see generate-matrix.sh - rather than four independent
+# Fill-discovery passes.
+#
+# Publishing only happens if every leg of every one of the four matrices
+# passes. On a pull_request, only unit-test runs (see the `if:` on every
+# other job) - PRs get fast behavioral feedback without spending CI time on
+# the full boot-matrix or attempting to cut a release from an unmerged head.
 #
 # Paper 1.21.9 is additionally pinned (always included in the Paper leg,
 # independent of Fill discovery) since it's this plugin's actual production
@@ -37,6 +49,15 @@ env:
   # smoke-tested even if Fill reports a stable build for them. Bump this
   # when you intentionally drop support for older MC versions.
   MIN_MC_VERSION: "1.21.9"
+  # Where smoke-test.sh downloads Plan Player Analytics from for the two
+  # "with Plan" legs of the matrix (see PLAN_MODE below). Left empty on
+  # purpose: smoke-test.sh's resolve_plan_jar_url() resolves the real
+  # download URL from Plan's latest GitHub release at run time instead of
+  # trusting a fixed ".../releases/latest/download/Plan.jar" URL to exist -
+  # Plan's own release history shows the exact asset name isn't always
+  # "Plan.jar". Set this to a specific URL only to pin Plan to a fixed
+  # build instead of always testing against latest.
+  PLAN_JAR_URL: ""
 
 permissions:
   contents: write # needed to publish/update the "latest" release below
@@ -193,11 +214,24 @@ jobs:
   #    AND Folia, keeps only versions >= MIN_MC_VERSION that currently
   #    have a STABLE build (plus the pinned 1.21.9 leg, which is ALPHA-only
   #    - see generate-matrix.sh), and emits
-  #    {"include":[{server_type,mc_version,channel}, ...]} for the
+  #    {"include":[{server_type,mc_version,channel,plan}, ...]} for the
   #    smoke-test job below to consume. This is intentionally its own job
   #    (not a step inside `build`) so a Fill API hiccup shows up as its own
   #    clearly-named red X instead of being buried inside the compile
   #    job's logs.
+  #
+  #    The `plan` field ("none"/"plan") is what actually produces the four
+  #    separate testing matrices this workflow is built around - every
+  #    discovered (server_type, mc_version, channel) triple is emitted
+  #    twice, once per `plan` value, so the resulting `include` list is the
+  #    union of:
+  #      1. paper (no plugins)
+  #      2. folia (no plugins)
+  #      3. paper (Plan Player Analytics)
+  #      4. folia (Plan Player Analytics)
+  #    See generate-matrix.sh for how each is built and smoke-test.sh for
+  #    what a "plan" leg does differently (drops Plan.jar in + pre-accepts
+  #    its GeoLite2 EULA + verifies PlanHook actually registered with it).
   # ---------------------------------------------------------------------
   generate-matrix:
     if: github.event_name != 'pull_request'
@@ -221,12 +255,19 @@ jobs:
           echo "matrix=$MATRIX_JSON" >> "$GITHUB_OUTPUT"
 
   # ---------------------------------------------------------------------
-  # 3. Fan out: one job per (server_type, mc_version, channel) triple from
-  #    the discovered matrix. Each leg downloads the SAME jar built once in
-  #    `build` above (never rebuilds it) and boots it against that leg's
-  #    server type/version, resolving a build on that leg's specific
-  #    channel (STABLE for everything discovered dynamically; ALPHA for
-  #    the pinned 1.21.9 leg - see generate-matrix.sh).
+  # 3. Fan out: one job per (server_type, mc_version, channel, plan) entry
+  #    from the discovered matrix - i.e. one job per leg of all four
+  #    testing matrices (paper/no-plugins, folia/no-plugins,
+  #    paper/Plan, folia/Plan) at once. Each leg downloads the SAME jar
+  #    built once in `build` above (never rebuilds it) and boots it
+  #    against that leg's server type/version, resolving a build on that
+  #    leg's specific channel (STABLE for everything discovered
+  #    dynamically; ALPHA for the pinned 1.21.9 leg - see
+  #    generate-matrix.sh). When matrix.plan is "plan", smoke-test.sh also
+  #    downloads Plan Player Analytics (PLAN_JAR_URL above), pre-accepts
+  #    its GeoLite2 EULA so it can actually finish enabling, and asserts
+  #    AnarchyPhantoms' PlanHook registered with it - not just that both
+  #    plugins loaded.
   # ---------------------------------------------------------------------
   smoke-test:
     needs: [build, generate-matrix]
@@ -258,12 +299,14 @@ jobs:
           name: jar-${{ needs.build.outputs.short_sha }}
           path: dist
 
-      - name: Smoke test on ${{ matrix.server_type }} ${{ matrix.mc_version }} (${{ matrix.channel }})
+      - name: Smoke test on ${{ matrix.server_type }} ${{ matrix.mc_version }} (${{ matrix.channel }}, plan=${{ matrix.plan }})
         id: smoke
         env:
           SERVER_TYPE: ${{ matrix.server_type }}
           TARGET_MC_VERSION: ${{ matrix.mc_version }}
           TARGET_CHANNEL: ${{ matrix.channel }}
+          PLAN_MODE: ${{ matrix.plan }}
+          PLAN_JAR_URL: ${{ env.PLAN_JAR_URL }}
           JAR_PATH: dist/${{ needs.build.outputs.jar_name }}
         run: bash .github/workflows/scripts/smoke-test.sh
 
@@ -271,7 +314,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: smoke-log-${{ matrix.server_type }}-${{ matrix.mc_version }}-${{ needs.build.outputs.short_sha }}
+          name: smoke-log-${{ matrix.server_type }}-${{ matrix.mc_version }}-${{ matrix.plan }}-${{ needs.build.outputs.short_sha }}
           path: |
             ${{ runner.temp }}/smoketest/logs/latest.log
             ${{ runner.temp }}/smoketest/console.log
@@ -447,9 +490,13 @@ jobs:
           body: |
             Automated build from commit ${{ github.sha }}.
             This is a permanent, immutable release for this specific commit.
-            Smoke-tested against Paper and Folia, all supported versions >= ${{ env.MIN_MC_VERSION }}
+            Smoke-tested against 4 matrices, all supported versions >= ${{ env.MIN_MC_VERSION }}
             (Paper 1.21.9 included via its pinned ALPHA build - Paper never shipped a STABLE
-            build for that version).
+            build for that version):
+              1. Paper, no plugins
+              2. Folia, no plugins
+              3. Paper, with Plan Player Analytics
+              4. Folia, with Plan Player Analytics
             SHA-256: `${{ needs.build.outputs.jar_sha256 }}`
 
             Full CI logs for this run: `build-${{ needs.build.outputs.short_sha }}.log`

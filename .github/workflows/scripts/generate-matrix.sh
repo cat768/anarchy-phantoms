@@ -2,7 +2,20 @@
 # Queries PaperMC's Fill API for every Paper AND Folia Minecraft version that
 # has at least one STABLE build, filters both lists down to versions >=
 # MIN_VERSION, and emits a JSON matrix pairing (server_type, mc_version,
-# channel) for GitHub Actions' `strategy.matrix.include`.
+# channel, plan) for GitHub Actions' `strategy.matrix.include`.
+#
+# The `plan` field ("none" or "plan") doubles every (server_type, mc_version,
+# channel) entry discovered below into two smoke-test legs: one with no
+# plugins at all, and one with Plan Player Analytics also dropped into
+# plugins/ (see smoke-test.sh). That's what actually produces the four
+# distinct testing matrices the workflow is built around:
+#   1. paper (no plugins)
+#   2. folia (no plugins)
+#   3. paper (Plan Player Analytics)
+#   4. folia (Plan Player Analytics)
+# Each is just the (server_type x plan) slice of the one discovered version
+# list below - keeping a single Fill-discovery pass rather than querying
+# Fill four separate times for what is the same set of versions.
 #
 # Why 1.21.9 as a floor (not just "whatever Folia happens to support"):
 # Folia lags Paper and only has builds for 1.21, 1.20, 1.19 today (per
@@ -132,12 +145,24 @@ fi
 
 # Build the JSON matrix with jq rather than string-concatenation, so
 # quoting/escaping is never a hand-rolled risk. Each "mc_version:channel"
-# entry becomes {"server_type":..., "mc_version":..., "channel":...}.
+# entry becomes two entries - {"server_type":..., "mc_version":...,
+# "channel":..., "plan":"none"} and the same with "plan":"plan" - so every
+# discovered (server_type, mc_version, channel) triple is smoke-tested both
+# with no plugins and with Plan Player Analytics installed. This is the
+# mechanism behind the four separate testing matrices described above: the
+# resulting `include` list is exactly their union, and each leg's `plan`
+# value is what smoke-test.sh reads to decide whether to fetch and drop in
+# Plan.jar.
+PLAN_AXES='none plan'
 {
-  printf '%s\n' "$PAPER_ENTRIES" \
-    | jq -R -c 'split(":") | {server_type: "paper", mc_version: .[0], channel: .[1]}'
-  if [ -n "$FOLIA_ENTRIES" ]; then
-    printf '%s\n' "$FOLIA_ENTRIES" \
-      | jq -R -c 'split(":") | {server_type: "folia", mc_version: .[0], channel: .[1]}'
-  fi
+  for p in $PLAN_AXES; do
+    printf '%s\n' "$PAPER_ENTRIES" \
+      | jq -R -c --arg plan "$p" \
+        'select(length > 0) | split(":") | {server_type: "paper", mc_version: .[0], channel: .[1], plan: $plan}'
+    if [ -n "$FOLIA_ENTRIES" ]; then
+      printf '%s\n' "$FOLIA_ENTRIES" \
+        | jq -R -c --arg plan "$p" \
+          'select(length > 0) | split(":") | {server_type: "folia", mc_version: .[0], channel: .[1], plan: $plan}'
+    fi
+  done
 } | jq -s -c '{include: .}'
